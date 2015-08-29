@@ -2469,6 +2469,7 @@ messages:
       Send(self,@CreateOneRoomIfNew,#num=RID_FOREST5,#class=&Forest5);
       Send(self,@CreateOneRoomIfNew,#num=RID_FOREST4,#class=&Forest4);
       Send(self,@CreateOneRoomIfNew,#num=RID_CAVE3,#class=&Cave3);
+      Send(self,@CreateOneRoomIfNew,#num=RID_FOREST6,#class=&Forest6);
 
       Send(self,@CreateOneRoomIfNew,#num=RID_GUEST1,#class=&Guest1);
       Send(self,@CreateOneRoomIfNew,#num=RID_GUEST2,#class=&Guest2);

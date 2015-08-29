@@ -1,0 +1,134 @@
+% Meridian 59, Copyright 1994-2012 Andrew Kirmse and Chris Kirmse.
+% All rights reserved.
+%
+% This software is distributed under a license that is described in
+% the LICENSE file that accompanies it.
+%
+% Meridian is a registered trademark.
+
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+Forest6 is Room
+
+constants:
+
+   include blakston.khd
+   
+   COLOR_BLUE = 1
+   COLOR_GREEN = 2
+   COLOR_YELLOW = 3
+   COLOR_DAENKS = 4
+
+resources:
+   waterfall_soundmockers = wfall2.wav
+   room_forest6 = mockers.roo
+   room_name_forest6 = "Chamber of the Lost Heroes"
+   
+   name_daenks = "Daenks"
+   desc_daenks = "He died doing the right thing."
+   
+   name_delerium = "Delerium"
+   desc_deleriun = ""
+   
+   name_shakrune = "ShaKrune"
+   desc_shakrune = ""
+   
+   name_gar = "Gar"
+   desc_gar = ""
+   
+   name_keen = "Keen"
+   desc_keen = ""
+   
+   name_morbus = "Morbus"
+   desc_morbus = ""
+   
+   name_phil = "Phil"
+   desc_phil = ""
+   
+   name_mayhem = "Mayhem"
+   desc_mayhem = ""
+   
+   name_zaphod = "Zaphod"
+   desc_zaphod = ""
+   
+   name_moderators = "Moderation Team"
+   desc_moderators = ""
+   
+   name_community = "You, The Player"
+   desc_community = ""
+   
+   forest6_music = castle.mp3
+   
+classvars:
+
+   vrName = room_name_forest6
+
+   viTeleport_row = 6
+   viTeleport_col = 8
+   viTeleport_angle = 3387
+   viTerrain_type = TERRAIN_CASTLE | TERRAIN_RESIDENCE | TERRAIN_MYSTICAL | TERRAIN_FOUNTAIN
+   
+properties:
+
+   prMusic = mockers_music
+
+   piBaseLight = LIGHT_DARK
+   piOutside_factor = OUTDOORS_3
+
+   piDirectional_percent = DIRECTIONAL_PERCENT_OUTDOORS
+
+   pbSnowGroundTexture = TRUE
+
+   prRoom = room_forest6
+   piRoom_num = RID_FOREST6
+   
+messages:
+
+   Constructed()
+   {
+      plLooping_sounds = [[ waterfall_soundmockers, 8, 8, 15, 50  ]];
+
+      propagate;
+   }
+   
+   CreateStandardExits()
+   {
+      plExits = $;
+
+      plExits = Cons([ 12, 10, RID_CASTLE2D, 31, 20, ROTATE_NONE ],plExits);
+
+
+      propagate;
+   }
+   
+   FirstUserEntered()
+   {
+      %% replace existing statues
+      send(self,@CreateStatues);
+
+      propagate;
+   }
+   
+   CreateStatues()
+   {
+      local oStatue, i;
+      %% delete any existing statues
+      for i in plPassive
+      {
+         oStatue = send(self,@HolderExtractObject,#data=i);
+
+         if isClass(oStatue,&Statue)
+         {
+            send(oStatue,@Delete);
+         }
+      }
+      
+      oStatue = Create(&Statue,#special=COLOR_DAENKS,#specialname=name_daenks,
+                       #specialgender=GENDER_MALE,#desc=desc_daenks);
+      Send(self,@NewHold,#what=oStatue,#new_angle=ANGLE_SOUTH_WEST,
+           #new_row=3,#new_col=10,#fine_row=24,#fine_col=28);
+         return;
+   }
+   
+end
