@@ -35,6 +35,8 @@ constants:
 
 resources:
 
+   include revenant.lkod
+
    revenant_name_rsc = "revenant"
    revenant_icon_rsc = zombie.bgf
    revenant_desc_rsc = \
@@ -101,7 +103,7 @@ messages:
 
       if speed <> $
       {
-         speed = Send(Send(SYS,@GetSettings),@GetRevenantSpeed);
+         speed = Send(SETTINGS_OBJECT,@GetRevenantSpeed);
          viSpeed = speed;
       }
 

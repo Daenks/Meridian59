@@ -16,6 +16,8 @@ constants:
 
 resources:
 
+   include skel.lkod
+
    skeleton_koc_name_rsc = "chaleoc"
    skeleton_name_rsc = "skeleton"
    skeleton_icon_rsc = skelbody.bgf
@@ -65,11 +67,15 @@ properties:
 
    piAnimation = ANIM_NONE
 
+   viReputationGroup = REP_UNDEAD
+
 messages:
 
    Constructed()
    {
       Send(self,@SetResistances);
+
+      vlReputationEnemies = [REP_FAROL];
 
       propagate;
    }

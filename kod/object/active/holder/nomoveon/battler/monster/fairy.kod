@@ -16,6 +16,8 @@ constants:
 
 resources:
 
+   include fairy.lkod
+
    good_fairy_koc_name_rsc = "kinimixlal"
    good_fairy_name_rsc = "fey elhai"
    good_fairy_icon_rsc = faerie-g.bgf
@@ -71,6 +73,8 @@ properties:
    viKarma = 50
    piAnimation = ANIM_NONE
 
+   viReputationGroup = REP_FEY_GOOD
+   
 messages:
 
    Constructor()
@@ -80,6 +84,8 @@ messages:
                         [ATCK_WEAP_MAGIC, 30 ],
                         [-ATCK_SPELL_UNHOLY, -30 ]
                       ];
+
+      vlReputationEnemies = [REP_FEY_EVIL];
 
       propagate;
    }

@@ -15,11 +15,14 @@
 
 void InitTime();
 int GetTime();
+int GetTimeZoneOffset();
+
 const char * TimeStr(time_t time);
 const char * ShortTimeStr(time_t time);
 const char * FileTimeStr(time_t time);
 const char * RelativeTimeStr(int time);
 UINT64 GetMilliCount();
+double GetMicroCountDouble();
 
 #endif
 

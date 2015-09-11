@@ -68,7 +68,7 @@ config_table_type config_table[] =
 { SOCKET_GROUP,           F, "[Socket]",      CONFIG_GROUP, "" },
 { SOCKET_PORT,            F, "Port",          CONFIG_INT,   "5959" },
 { SOCKET_MAINTENANCE_PORT,F, "MaintenancePort",CONFIG_INT,  "9998" },
-{ SOCKET_MAINTENANCE_MASK,F, "MaintenanceMask",CONFIG_STR,  "208.192.72.0" },
+{ SOCKET_MAINTENANCE_MASK,F, "MaintenanceMask",CONFIG_STR,  "::ffff:127.0.0.1" },
 { SOCKET_DNS_LOOKUP,      T, "DNSLookup",     CONFIG_BOOL,  "No" },
 { SOCKET_NAGLE,           F, "Nagle",         CONFIG_BOOL,  "Yes" },
 { SOCKET_BLOCK_TIME,      T, "BlockTime",     CONFIG_INT,   "300" }, /* seconds */
@@ -79,6 +79,7 @@ config_table_type config_table[] =
 { CHANNEL_LOG_DISK,       F, "LogDisk",       CONFIG_BOOL,  "No" },
 { CHANNEL_FLUSH,          T, "Flush",         CONFIG_BOOL,  "No" },
 { CHANNEL_GOD_DISK,       T, "GodDisk",       CONFIG_BOOL,  "Yes" },
+{ CHANNEL_ADMIN_DISK,     T, "AdminDisk",     CONFIG_BOOL,  "Yes" },
 
 { GUEST_GROUP,            F, "[Guest]",       CONFIG_GROUP, "" },
 { GUEST_ACCOUNT,          F, "Account",       CONFIG_STR,   "GUEST" },
@@ -135,6 +136,7 @@ config_table_type config_table[] =
 
 { RESOURCE_GROUP,         F, "[Resource]",    CONFIG_GROUP, "" },
 { RESOURCE_RSC_SPEC,      F, "RscSpec",       CONFIG_STR,   "*.rsc" },
+{ RESOURCE_LANGUAGE,      T, "Language",      CONFIG_INT,   "0" },
 
 { MEMORY_GROUP,           F, "[Memory]",      CONFIG_GROUP, "" },
 { MEMORY_SIZE_CLASS_HASH, F, "SizeClassHash", CONFIG_INT,   "99971" },
@@ -203,6 +205,7 @@ config_table_type config_table[] =
 { DEBUG_INITPROPERTIES,   T, "InitProperties",CONFIG_BOOL,  "No" },
 { DEBUG_INITLOCALS,       T, "InitLocals",    CONFIG_BOOL,  "No" },
 { DEBUG_UNINITIALIZED,    T, "Uninitialized", CONFIG_BOOL,  "No" },
+{ DEBUG_TIME_CALLS,       T, "TimeCalls",     CONFIG_BOOL,  "No" },
 
 { SECURITY_GROUP,         F, "[Security]",    CONFIG_GROUP, "" },
 { SECURITY_LOG_SPOOFS,    T, "LogSpoofs",     CONFIG_BOOL,  "Yes" }, 
@@ -225,7 +228,6 @@ config_table_type config_table[] =
 { MYSQL_DB,               F, "Database",      CONFIG_STR,   "meridian" },
 
 { BLAKOD_GROUP,           F, "[Blakod]",      CONFIG_GROUP, "" },
-{ BLAKOD_MAX_STATEMENTS,  T, "MaxStatements", CONFIG_INT,   "20000000" },
 
 };
 

@@ -65,6 +65,10 @@ static char INIInventory[]   = "InventoryNum";
 static char INIAggressive[]  = "Aggressive";
 static char INITempSafe[]    = "TempSafe";
 static char INIGrouping[]    = "Grouping";
+static char INIAutoLoot[]    = "AutoLoot";
+static char INIAutoCombine[] = "AutoCombine";
+static char INIReagentBag[]  = "ReagentBag";
+static char INISpellPower[]  = "SpellPower";
 static char INIBounce[]      = "Bounce";
 static char INIToolbar[]     = "Toolbar";
 static char INIPainFX[]      = "Pain";
@@ -77,7 +81,7 @@ static char INILagbox[]      = "LatencyMeter";
 static char INIHaloColor[]   = "HaloColor";
 static char INIColorCodes[]  = "ColorCodes";
 static char INIMapAnnotations[] = "MapAnnotations";
-
+static char INILanguage[]    = "Language";
 static char window_section[] = "Window";         /* Section in INI file for window info */
 static char INILeft[]        = "NormalLeft";
 static char INIRight[]       = "NormalRight";
@@ -232,6 +236,10 @@ void ConfigLoad(void)
    config.aggressive   = GetConfigInt(interface_section, INIAggressive, False, ini_file);
    config.tempsafe     = GetConfigInt(interface_section, INITempSafe, True, ini_file);
    config.grouping     = GetConfigInt(interface_section, INIGrouping, True, ini_file);
+   config.autoloot     = GetConfigInt(interface_section, INIAutoLoot, True, ini_file);
+   config.autocombine  = GetConfigInt(interface_section, INIAutoCombine, True, ini_file);
+   config.reagentbag   = GetConfigInt(interface_section, INIReagentBag, True, ini_file);
+   config.spellpower   = GetConfigInt(interface_section, INISpellPower, True, ini_file);
    config.bounce       = GetConfigInt(interface_section, INIBounce, True, ini_file);
    config.toolbar      = GetConfigInt(interface_section, INIToolbar, True, ini_file);
    config.pain         = GetConfigInt(interface_section, INIPainFX, True, ini_file);
@@ -243,7 +251,7 @@ void ConfigLoad(void)
    config.halocolor    = GetConfigInt(interface_section, INIHaloColor, 0, ini_file);
    config.colorcodes   = GetConfigInt(interface_section, INIColorCodes, True, ini_file);
    config.map_annotations = GetConfigInt(interface_section, INIMapAnnotations, True, ini_file);
-
+   config.language     = GetConfigInt(interface_section, INILanguage, 0, ini_file);
    config.guest        = GetConfigInt(misc_section, INIGuest, False, ini_file);
    config.server_low   = GetConfigInt(misc_section, INIServerLow, 0, ini_file);
    config.server_high  = GetConfigInt(misc_section, INIServerHigh, 0, ini_file);
@@ -338,6 +346,10 @@ void ConfigSave(void)
    WriteConfigInt(interface_section, INIAggressive, config.aggressive, ini_file);
    WriteConfigInt(interface_section, INITempSafe, config.tempsafe, ini_file);
    WriteConfigInt(interface_section, INIGrouping, config.grouping, ini_file);
+   WriteConfigInt(interface_section, INIAutoLoot, config.autoloot, ini_file);
+   WriteConfigInt(interface_section, INIAutoCombine, config.autocombine, ini_file);
+   WriteConfigInt(interface_section, INIReagentBag, config.reagentbag, ini_file);
+   WriteConfigInt(interface_section, INISpellPower, config.spellpower, ini_file);
    WriteConfigInt(interface_section, INIBounce, config.bounce, ini_file);
    WriteConfigInt(interface_section, INIToolbar, config.toolbar, ini_file);
    WriteConfigInt(interface_section, INIDrawMap, config.drawmap, ini_file);
@@ -351,7 +363,8 @@ void ConfigSave(void)
    WriteConfigInt(interface_section, INIHaloColor, config.halocolor, ini_file);
    WriteConfigInt(interface_section, INIColorCodes, config.colorcodes, ini_file);
    WriteConfigInt(interface_section, INIMapAnnotations, config.map_annotations, ini_file);
-   
+   WriteConfigInt(interface_section, INILanguage, config.language, ini_file);
+
    // Don't write out "guest" option; user can't set it
 
    WriteConfigInt(misc_section, INIServerLow, config.server_low, ini_file);

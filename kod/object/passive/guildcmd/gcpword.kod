@@ -17,6 +17,8 @@ constants:
 
 resources:
 
+   include gcpword.lkod
+
    guildsetpassword_name_rsc = "set password"
    guildsetpassword_icon_rsc = light.bgf
 
@@ -59,6 +61,13 @@ messages:
    "Change the password of the target player to a new password!"  
    {
       local oGuild, oHall;
+
+      if StringLength(data) > MAX_GUILD_NAME_LEN
+      {
+         Debug(who, "had guild password too long");
+
+         return;
+      }
 
       oGuild = send(who,@getguild);
 

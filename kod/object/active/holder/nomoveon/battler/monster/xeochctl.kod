@@ -34,6 +34,8 @@ constants:
 
 resources:
 
+   include xeochctl.lkod
+
    Xeochicatl_name_rsc = "Xeochicatl"
    Xeochicatl_koc_name_rsc = "Xeo'chicatl"
    Xeochicatl_icon_rsc = Xeo.bgf
@@ -103,6 +105,8 @@ properties:
    piDrainAmount = 5
    % What do we drop on death?  Silly default item here.
    pcTreasureItem = &CheapOreChunk
+
+   viReputationGroup = REP_HERETIC
 
 messages:
 

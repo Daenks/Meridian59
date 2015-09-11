@@ -16,6 +16,8 @@ constants:
 
 resources:
 
+   include seduce.lkod
+
    seduce_name_rsc = "seduce"
    seduce_icon_rsc = iseduce.bgf
    seduce_desc_rsc = \
@@ -122,7 +124,7 @@ messages:
       if IsClass(who,&Player)
       {
          if Send(who,@CheckBattlerMinionCount)
-               >= Send(Send(SYS,@GetSettings),@GetPlayerMinionLimit)
+               >= Send(SETTINGS_OBJECT,@GetPlayerMinionLimit)
          {
             Send(who,@MsgSendUser,#message_rsc=seduce_too_many);
 
@@ -132,7 +134,7 @@ messages:
       else
       {
          if Send(who,@CheckBattlerMinionCount)
-               >= Send(Send(SYS,@GetSettings),@GetPlayerMinionLimit)
+               >= Send(SETTINGS_OBJECT,@GetPlayerMinionLimit)
          {
             return FALSE;
          }

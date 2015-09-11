@@ -31,6 +31,8 @@ constants:
 
 resources:
 
+   include dangel.lkod
+
    DarkAngel_koc_name_rsc = "ozangelis"
    DarkAngel_name_rsc = "dark angel"
    DarkAngel_icon_rsc = angel.bgf
@@ -94,6 +96,8 @@ properties:
 
    % piSpellRange in FINENESS units. 10 row/cols.
    piSpellRange = 640
+
+   viReputationGroup = REP_HERETIC
 
 messages:
 

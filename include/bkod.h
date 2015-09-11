@@ -38,6 +38,10 @@ enum
    NEGATE = 1,
    NONE = 2,
    BITWISE_NOT = 3,
+   POST_INCREMENT = 4,
+   POST_DECREMENT = 5,
+   PRE_INCREMENT = 6,
+   PRE_DECREMENT = 7,
 };
 
 /* info byte for binary assign */
@@ -114,6 +118,9 @@ enum
    SENDMESSAGE = 11,
    POSTMESSAGE = 12,
 
+   SAVEGAME = 19,
+   LOADGAME = 20,
+
    GODLOG = 21,
    DEBUG = 22,
    ADDPACKET = 23,
@@ -144,6 +151,8 @@ enum
    GETTIMEREMAINING = 53,
    ISTIMER = 54,
 
+   MOVESECTORBSP = 59,
+   CHANGETEXTUREBSP = 60,
    CREATEROOMDATA = 61,
    FREEROOM = 62,
    ROOMDATA = 63,
@@ -151,6 +160,9 @@ enum
    CANMOVEINROOMFINE = 65,
    CANMOVEINROOMHIGHRES = 66,
    GETHEIGHT = 67,
+   GETHEIGHTFLOORBSP = 68,
+   GETHEIGHTCEILINGBSP = 69,
+   LINEOFSIGHTBSP = 70,
 
    MINIGAMENUMBERTOSTRING = 71,
    MINIGAMESTRINGTONUMBER = 72,
@@ -170,7 +182,9 @@ enum
    SWAPLISTELEM = 112,
    INSERTLISTELEM = 113,
    LAST = 114,
+   ISLISTMATCH = 115,
 
+   GETTIMEZONEOFFSET = 119,
    GETTIME = 120,
    GETTICKCOUNT = 121,
 
@@ -183,6 +197,7 @@ enum
    GETTABLEENTRY = 143,
    DELETETABLEENTRY = 144,
    DELETETABLE = 145,
+   ISTABLE = 146,
 
    RECYCLEUSER = 151,
 
@@ -211,8 +226,8 @@ enum
    TAG_CLASS = 10,
    TAG_MESSAGE = 11,
    TAG_DEBUGSTR = 12,
-   TAG_OVERRIDE = 13,     // For overriding a class variable with a property
-   TAG_RESERVED = 14,     // Reserved for future expansion
+   TAG_TABLE = 13,
+   TAG_OVERRIDE = 14,     // For overriding a class variable with a property
    TAG_INVALID = 15,
 };
 

@@ -15,6 +15,8 @@ constants:
    include blakston.khd
 
 resources:
+
+   include troll.lkod
    
    troll_name_rsc = "troll"
    troll_icon_rsc = troll.bgf
@@ -61,6 +63,8 @@ properties:
 
    piAnimation = ANIM_NONE
 
+   viReputationGroup = REP_TROLL
+
 messages:
 
    Constructed()
@@ -69,6 +73,8 @@ messages:
                         [-ATCK_SPELL_ACID, 80 ],
                         [ATCK_WEAP_NERUDITE, -80 ],
                         [ATCK_WEAP_NONMAGIC, 80 ] ];
+
+      vlReputationEnemies = [REP_ORC];
 
       propagate;
    }

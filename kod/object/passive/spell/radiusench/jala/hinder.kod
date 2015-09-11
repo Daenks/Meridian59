@@ -16,6 +16,8 @@ constants:
 
 resources:
 
+   include hinder.lkod
+
    hinder_cast = "You begin playing a discordant tune."
    hinder_starts = "%s begins playing a discordant tune!"
    hinder_ends = "The discordant tune maintained by %s fades."
@@ -39,7 +41,6 @@ classvars:
    viDrainTime = 5000    % Drain some mana every viDrainTime milliseconds
    viChance_To_Increase = 10
    viMeditate_ratio = 20
-   viBaseRange = 4
 
    viHinderedSchool = SS_JALA  % What school does this song hinder?
 

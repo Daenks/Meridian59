@@ -70,6 +70,10 @@ typedef struct {
    Bool aggressive;              /* Allowed to attack other players? */
    Bool tempsafe;                /* Do we get a temporary angel when we die? */
    Bool grouping;                /* Do we join building groups? */
+   Bool autoloot;                /* Automatically loot stackable items? */
+   Bool autocombine;             /* Autocombine spell items? */
+   Bool reagentbag;              /* Automatically stash items into reagent bag? */
+   Bool spellpower;              /* Display spellpower for spells we cast? */
    Bool bounce;                  /* Display player "bouncing" animation? */
    Bool toolbar;                 /* Display toolbar? */
 
@@ -80,7 +84,8 @@ typedef struct {
    Bool antiprofane;             /* Kill annoying incoming profanity. */
    Bool guest;                   /* Automatically log in as "guest"? */
    int  server_low, server_high; /* Closed interval of legal server numbers for guest logins */
-   int	halocolor;					//	0 = red, 1 = blue, 2 = green
+   int  halocolor;               // 0 = red, 1 = blue, 2 = green
+   int  language;                // 0 = English, 1 = German, 2 = Korean
 
    Bool lagbox;                  /* Display lag meter? */
    Bool ignoreprofane;           /* Kill messages including any profanity. */

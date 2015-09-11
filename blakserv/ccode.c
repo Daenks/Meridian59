@@ -53,6 +53,100 @@ int C_Invalid(int object_id,local_var_type *local_vars,
 	return NIL;
 }
 
+/*
+ * C_SaveGame: Performs a system save, but without garbage collection. We
+ *    can't garbage collect when the game is saved from blakod as object,
+ *    list, timer and string references (in local vars) may be incorrect when
+ *    control passes back to the calling message. Returns a blakod string
+ *    containing the time of the saved game if successful.
+ */
+int C_SaveGame(int object_id,local_var_type *local_vars,
+               int num_normal_parms,parm_node normal_parm_array[],
+               int num_name_parms,parm_node name_parm_array[])
+{
+   val_type ret_val;
+   int save_time = 0;
+   string_node *snod;
+   char timeStr[15];
+
+   PauseTimers();
+   lprintf("C_SaveGame saving game\n");
+   save_time = SaveAll();
+   UnpauseTimers();
+
+   // Check for a sane time value.
+   if (save_time < 0 || save_time > INT_MAX)
+   {
+      bprintf("C_SaveGame got invalid save game time!");
+      return NIL;
+   }
+
+   ret_val.v.tag = TAG_STRING;
+   ret_val.v.data = CreateString("");
+
+   snod = GetStringByID(ret_val.v.data);
+   if (snod == NULL)
+   {
+      bprintf("C_SaveGame can't set invalid string %i,%i\n",
+         ret_val.v.tag, ret_val.v.data);
+      return NIL;
+   }
+
+   // Make a string with the save game time.
+   sprintf(timeStr, "%d", save_time);
+
+   // Make a blakod string using the string value of the save game time.
+   SetString(snod, timeStr, 10);
+
+   return ret_val.int_val;
+}
+
+/*
+ * C_LoadGame: Takes a blakod string as a parameter, which contains a save
+ *    game time.  Posts a message to the blakserv main thread which triggers
+ *    a load game, using the save game time value sent in the message. All
+ *    users are disconnected when the game reload triggers.
+ */
+int C_LoadGame(int object_id, local_var_type *local_vars,
+               int num_normal_parms, parm_node normal_parm_array[],
+               int num_name_parms, parm_node name_parm_array[])
+{
+   val_type game_val;
+   string_node *snod;
+   int save_time = 0;
+
+   game_val = RetrieveValue(object_id, local_vars, normal_parm_array[0].type,
+      normal_parm_array[0].value);
+
+   if (game_val.v.tag != TAG_STRING)
+   {
+      bprintf("C_LoadGame can't process invalid string %i,%i\n",
+         game_val.v.tag, game_val.v.data);
+      return NIL;
+   }
+
+   snod = GetStringByID(game_val.v.data);
+   if (snod == NULL)
+   {
+      bprintf("C_LoadGame can't get invalid string %i,%i\n",
+         game_val.v.tag, game_val.v.data);
+      return NIL;
+   }
+
+   // Convert string time to integer.
+   save_time = atoi(snod->data);
+
+   // Check for a sane time value.
+   if (save_time < 0 || save_time > INT_MAX)
+   {
+      bprintf("C_LoadGame got invalid save game time!");
+      return NIL;
+   }
+
+   PostThreadMessage(main_thread_id, WM_BLAK_MAIN_LOAD_GAME, 0, save_time);
+
+   return NIL;
+}
 
 int C_AddPacket(int object_id,local_var_type *local_vars,
 				int num_normal_parms,parm_node normal_parm_array[],
@@ -177,7 +271,7 @@ int C_GodLog(int object_id,local_var_type *local_vars,
 				}
 				else
 				{
-					sprintf(buf+strlen(buf),"%s",r->resource_val);
+					sprintf(buf+strlen(buf),"%s",r->resource_val[0]);
 				}
 			}
 			break;
@@ -321,7 +415,7 @@ int C_Debug(int object_id,local_var_type *local_vars,
 				}
 				else
 				{
-					sprintf(buf+strlen(buf),"%s",r->resource_val);
+					sprintf(buf+strlen(buf),"%s",r->resource_val[0]);
 				}
 			}
 			break;
@@ -476,7 +570,7 @@ int C_SendMessage(int object_id,local_var_type *local_vars,
 {
    val_type object_val,message_val;
 
-   /* Get the object (or class or int 0) to which we are sending the message */
+   /* Get the object (or class or int) to which we are sending the message */
    /* Not to be confused with object_id, which is the 'self' object sending the message */
    object_val = RetrieveValue(object_id, local_vars, normal_parm_array[0].type,
       normal_parm_array[0].value);
@@ -505,31 +599,28 @@ int C_SendMessage(int object_id,local_var_type *local_vars,
       }
    }
 
-   /* Special:  sending to int 0 goes to system */
-   if (object_val.v.tag == TAG_INT && object_val.v.data == 0)
+   if (object_val.v.tag == TAG_OBJECT)
+      return SendBlakodMessage(object_val.v.data, message_val.v.data, num_name_parms, name_parm_array);
+
+   if (object_val.v.tag == TAG_INT)
    {
-      /* Allowed to send to INT 0 rather than OBJECT 0 (obsolete but backwards compatible) */
-      object_val.v.data = GetSystemObjectID();
-   }
-   else if (object_val.v.tag == TAG_CLASS)
-   {
-      /* allowed to send to TAG_CLASS (below) */
-   }
-   else if (object_val.v.tag != TAG_OBJECT)
-   {
-      /* Assumes object_id (the current 'self') is a valid object */
-      bprintf("C_SendMessage OBJECT %i CLASS %s can't send MESSAGE %s (%i) to non-object %i,%i\n",
-         object_id,
-         GetClassByID(GetObjectByID(object_id)->class_id)->class_name,
-         GetNameByID(message_val.v.data), message_val.v.data,
-         object_val.v.tag,object_val.v.data);
-         return NIL;
+      /* Can send to built-in objects using constants. */
+      object_val.v.data = GetBuiltInObjectID(object_val.v.data);
+      if (object_val.v.data > INVALID_OBJECT)
+         return SendBlakodMessage(object_val.v.data, message_val.v.data,
+                     num_name_parms, name_parm_array);
    }
 
    if (object_val.v.tag == TAG_CLASS)
-      return SendBlakodClassMessage(object_val.v.data,message_val.v.data,num_name_parms,name_parm_array);
-   else
-      return SendBlakodMessage(object_val.v.data,message_val.v.data,num_name_parms,name_parm_array);
+      return SendBlakodClassMessage(object_val.v.data, message_val.v.data, num_name_parms, name_parm_array);
+
+   /* Assumes object_id (the current 'self') is a valid object */
+   bprintf("C_SendMessage OBJECT %i CLASS %s can't send MESSAGE %s (%i) to non-object %i,%i\n",
+      object_id,
+      GetClassByID(GetObjectByID(object_id)->class_id)->class_name,
+      GetNameByID(message_val.v.data), message_val.v.data,
+      object_val.v.tag,object_val.v.data);
+   return NIL;
 }
 
 int C_PostMessage(int object_id,local_var_type *local_vars,
@@ -693,7 +784,6 @@ int C_GetClass(int object_id,local_var_type *local_vars,
 bool LookupString(val_type val, const char *function_name, const char **str, int *len)
 {
 	string_node *snod;
-	resource_node *r;
 
 	switch(val.v.tag)
 	{
@@ -714,14 +804,13 @@ bool LookupString(val_type val, const char *function_name, const char **str, int
 		break;
 		
 	case TAG_RESOURCE :
-		r = GetResourceByID(val.v.data);
-		if( r == NULL )
+      *str = GetResourceStrByLanguageID(val.v.data, ConfigInt(RESOURCE_LANGUAGE));
+      if (*str == NULL)
 		{
 			bprintf( "%s can't use invalid resource %i as string\n",
                   function_name, val.v.data );
 			return false;
 		}
-		*str = r->resource_val;
 		break;
 		
 	case TAG_DEBUGSTR :
@@ -764,40 +853,136 @@ int C_StringEqual(int object_id,local_var_type *local_vars,
 				  int num_normal_parms,parm_node normal_parm_array[],
 				  int num_name_parms,parm_node name_parm_array[])
 {
-	val_type s1_val,s2_val,ret_val;
-	const char *s1,*s2;
-	int len1,len2;
-	
-	s1_val = RetrieveValue(object_id,local_vars,normal_parm_array[0].type,
-		normal_parm_array[0].value);
-   if (!LookupString(s1_val, "C_StringEqual", &s1, &len1))
-      return NIL;
-	
-	s2_val = RetrieveValue(object_id,local_vars,normal_parm_array[1].type,
-		normal_parm_array[1].value);
-   if (!LookupString(s2_val, "C_StringEqual", &s2, &len2))
-      return NIL;
+   val_type s1_val, s2_val, ret_val;
+   const char *s1 = NULL, *s2 = NULL;
+   int len1, len2;
+   resource_node *r1 = NULL, *r2 = NULL;
+   Bool s1_resource = False, s2_resource = False;
 
-	/*
-	{
-	int i;
-	dprintf("-----------\n");
-	for (i=0;i<len1;i++)
-	dprintf("%c",s1[i]);
-	dprintf("-----------\n");
-	for (i=0;i<len2;i++)
-	dprintf("%c",s2[i]);
-	dprintf("-----------\n");
-	}
-	*/
-	
-	ret_val.v.tag = TAG_INT;
-	ret_val.v.data = FuzzyBufferEqual(s1,len1,s2,len2);
-	/*
-	dprintf("return %i\n-----\n",ret_val.v.data);
-	*/
-	
-	return ret_val.int_val;
+   ret_val.v.tag = TAG_INT;
+   ret_val.v.data = False;
+
+   s1_val = RetrieveValue(object_id, local_vars, normal_parm_array[0].type,
+      normal_parm_array[0].value);
+   s2_val = RetrieveValue(object_id, local_vars, normal_parm_array[1].type,
+      normal_parm_array[1].value);
+
+   if (s1_val.v.tag == TAG_RESOURCE)
+   {
+      r1 = GetResourceByID(s1_val.v.data);
+      if (r1 == NULL)
+      {
+         bprintf("C_StringEqual can't use invalid resource %i as string\n",
+            s1_val.v.data);
+         return ret_val.int_val;
+      }
+      s1_resource = True;
+   }
+   else
+   {
+      if (!LookupString(s1_val, "C_StringEqual", &s1, &len1))
+         return NIL;
+   }
+
+   if (s2_val.v.tag == TAG_RESOURCE)
+   {
+      r2 = GetResourceByID(s2_val.v.data);
+      if (r2 == NULL)
+      {
+         bprintf("C_StringEqual can't use invalid resource %i as string\n",
+            s2_val.v.data);
+         return ret_val.int_val;
+      }
+      s2_resource = True;
+   }
+   else
+   {
+      if (!LookupString(s2_val, "C_StringEqual", &s2, &len2))
+         return NIL;
+   }
+
+   // If both are resources, just compare the English string (first array position).
+   if (s1_resource && s2_resource)
+   {
+      s1 = r1->resource_val[0];
+      if (s1 == NULL)
+      {
+         bprintf("C_StringEqual got NULL string resource 1");
+         return ret_val.int_val;
+      }
+      s2 = r2->resource_val[0];
+      if (s2 == NULL)
+      {
+         bprintf("C_StringEqual got NULL string resource 2");
+         return ret_val.int_val;
+      }
+
+      len1 = strlen(s1);
+      len2 = strlen(s2);
+      ret_val.v.data = FuzzyBufferEqual(s1, len1, s2, len2);
+
+      return ret_val.int_val;
+   }
+
+   // First string is resource, second isn't.
+   if (s1_resource)
+   {
+      len2 = strlen(s2);
+      for (int i = 0; i < MAX_LANGUAGE_ID; i++)
+      {
+         s1 = r1->resource_val[i];
+         if (s1 == NULL)
+         {
+            if (i == 0)
+            {
+               bprintf("C_StringEqual got NULL string resource 1");
+               return ret_val.int_val;
+            }
+            continue;
+         }
+
+         len1 = strlen(s1);
+         if (FuzzyBufferEqual(s1, len1, s2, len2))
+         {
+            ret_val.v.data = True;
+            return ret_val.int_val;
+         }
+      }
+      return ret_val.int_val;
+   }
+
+   // Second string is resource, first isn't.
+   if (s2_resource)
+   {
+      len1 = strlen(s1);
+      for (int i = 0; i < MAX_LANGUAGE_ID; i++)
+      {
+         s2 = r2->resource_val[i];
+         if (s2 == NULL)
+         {
+            if (i == 0)
+            {
+               bprintf("C_StringEqual got NULL string resource 2");
+               return ret_val.int_val;
+            }
+            continue;
+         }
+
+         len2 = strlen(s2);
+         if (FuzzyBufferEqual(s1, len1, s2, len2))
+         {
+            ret_val.v.data = True;
+            return ret_val.int_val;
+         }
+      }
+      return ret_val.int_val;
+   }
+
+   // Neither strings are resources.
+   len1 = strlen(s1);
+   len2 = strlen(s2);
+   ret_val.v.data = FuzzyBufferEqual(s1, len1, s2, len2);
+   return ret_val.int_val;
 }
 
 void FuzzyCollapseString(char* pTarget, const char* pSource, int len)
@@ -865,7 +1050,6 @@ int C_StringSubstitute(int object_id,local_var_type *local_vars,
 	char *s0, *copyspot;
    const char *s1, *s2, *subspot;
 	int len1, len2, new_len;
-	resource_node *r;
 	
 	s0 = buf0;
 	s1 = buf1;
@@ -916,14 +1100,13 @@ int C_StringSubstitute(int object_id,local_var_type *local_vars,
 		break;
 		
 	case TAG_RESOURCE :
-		r = GetResourceByID( s1_val.v.data );
-		if( r == NULL )
+      s1 = GetResourceStrByLanguageID(s1_val.v.data, ConfigInt(RESOURCE_LANGUAGE));
+      if (s1 == NULL)
 		{
 			bprintf( "C_StringSub can't sub for invalid resource %i\n", s1_val.v.data );
 			return NIL;
 		}
-		s1 = r->resource_val;
-		len1 = strlen( r->resource_val );
+		len1 = strlen(s1);
 		break;
 		
 	case TAG_DEBUGSTR :
@@ -1027,43 +1210,141 @@ int C_StringSubstitute(int object_id,local_var_type *local_vars,
 }
 
 int C_StringContain(int object_id,local_var_type *local_vars,
-					int num_normal_parms,parm_node normal_parm_array[],
-					int num_name_parms,parm_node name_parm_array[])
+               int num_normal_parms,parm_node normal_parm_array[],
+               int num_name_parms,parm_node name_parm_array[])
 {
-	val_type s1_val,s2_val,ret_val;
-	const char *s1,*s2;
-	int len1,len2;
-	
-	s1_val = RetrieveValue(object_id,local_vars,normal_parm_array[0].type,
-		normal_parm_array[0].value);
-   if (!LookupString(s1_val, "C_StringContain", &s1, &len1))
-      return NIL;
-	
-	s2_val = RetrieveValue(object_id,local_vars,normal_parm_array[1].type,
-		normal_parm_array[1].value);
-   if (!LookupString(s2_val, "C_StringContain", &s2, &len2))
-      return NIL;
+   val_type s1_val, s2_val, ret_val;
+   const char *s1 = NULL,*s2 = NULL;
+   int len1, len2;
+   resource_node *r1 = NULL, *r2 = NULL;
+   Bool s1_resource = False, s2_resource = False;
+   
+   ret_val.v.tag = TAG_INT;
+   ret_val.v.data = False;
 
-	/*
-	{
-	int i;
-	dprintf("-----------\n");
-	for (i=0;i<len1;i++)
-	dprintf("%c",s1[i]);
-	dprintf("-----------\n");
-	for (i=0;i<len2;i++)
-	dprintf("%c",s2[i]);
-	dprintf("-----------\n");
-	}
-	*/
-	
-	ret_val.v.tag = TAG_INT;
-	ret_val.v.data = FuzzyBufferContain(s1,len1,s2,len2);
-	/*
-	dprintf("return %i\n-----\n",ret_val.v.data);
-	*/
-	
-	return ret_val.int_val;
+   s1_val = RetrieveValue(object_id,local_vars,normal_parm_array[0].type,
+      normal_parm_array[0].value);
+   s2_val = RetrieveValue(object_id,local_vars,normal_parm_array[1].type,
+      normal_parm_array[1].value);
+
+   if (s1_val.v.tag == TAG_RESOURCE)
+   {
+      r1 = GetResourceByID(s1_val.v.data);
+      if (r1 == NULL)
+      {
+         bprintf("C_StringContain can't use invalid resource %i as string\n",
+            s1_val.v.data);
+         return ret_val.int_val;
+      }
+      s1_resource = True;
+   }
+   else
+   {
+      if (!LookupString(s1_val, "C_StringContain", &s1, &len1))
+         return NIL;
+   }
+
+   if (s2_val.v.tag == TAG_RESOURCE)
+   {
+      r2 = GetResourceByID(s2_val.v.data);
+      if (r2 == NULL)
+      {
+         bprintf("C_StringContain can't use invalid resource %i as string\n",
+            s2_val.v.data);
+         return ret_val.int_val;
+      }
+      s2_resource = True;
+   }
+   else
+   {
+      if (!LookupString(s2_val, "C_StringContain", &s2, &len2))
+         return NIL;
+   }
+
+   // If both are resources, just compare the English string (first array position).
+   if (s1_resource && s2_resource)
+   {
+      s1 = r1->resource_val[0];
+      if (s1 == NULL)
+      {
+         bprintf("C_StringContain got NULL string resource 1");
+         return ret_val.int_val;
+      }
+      s2 = r2->resource_val[0];
+      if (s2 == NULL)
+      {
+         bprintf("C_StringContain got NULL string resource 2");
+         return ret_val.int_val;
+      }
+
+      len1 = strlen(s1);
+      len2 = strlen(s2);
+      ret_val.v.data = FuzzyBufferContain(s1, len1, s2, len2);
+
+      return ret_val.int_val;
+   }
+
+   // First string is resource, second isn't.
+   if (s1_resource)
+   {
+      len2 = strlen(s2);
+      ret_val.v.tag = TAG_INT;
+      for (int i = 0; i < MAX_LANGUAGE_ID; i++)
+      {
+         s1 = r1->resource_val[i];
+         if (s1 == NULL)
+         {
+            if (i == 0)
+            {
+               bprintf("C_StringContain got NULL string resource 1");
+               return ret_val.int_val;
+            }
+            continue;
+         }
+
+         len1 = strlen(s1);
+         if (FuzzyBufferContain(s1, len1, s2, len2))
+         {
+            ret_val.v.data = True;
+            return ret_val.int_val;
+         }
+      }
+      return ret_val.int_val;
+   }
+
+   // Second string is resource, first isn't.
+   if (s2_resource)
+   {
+      len1 = strlen(s1);
+      ret_val.v.tag = TAG_INT;
+      for (int i = 0; i < MAX_LANGUAGE_ID; i++)
+      {
+         s2 = r2->resource_val[i];
+         if (s2 == NULL)
+         {
+            if (i == 0)
+            {
+               bprintf("C_StringContain got NULL string resource 2");
+               return ret_val.int_val;
+            }
+            continue;
+         }
+
+         len2 = strlen(s2);
+         if (FuzzyBufferContain(s1, len1, s2, len2))
+         {
+            ret_val.v.data = True;
+            return ret_val.int_val;
+         }
+      }
+      return ret_val.int_val;
+   }
+
+   // Neither strings are resources.
+   len1 = strlen(s1);
+   len2 = strlen(s2);
+   ret_val.v.data = FuzzyBufferContain(s1, len1, s2, len2);
+   return ret_val.int_val;
 }
 
 /*
@@ -1130,8 +1411,8 @@ int C_SetResource(int object_id,local_var_type *local_vars,
 					str_val.v.data);
 				return NIL;
 			}
-			new_len = strlen(r->resource_val);
-			new_str = r->resource_val;
+			new_len = strlen(r->resource_val[0]);
+			new_str = r->resource_val[0];
 			break;
 		}
 	case TAG_STRING :
@@ -1253,7 +1534,6 @@ int C_SetString(int object_id,local_var_type *local_vars,
 {
    val_type s1_val,s2_val;
    string_node *snod,*snod2;
-   resource_node *r;
    const char *str;
 
    s1_val = RetrieveValue(object_id,local_vars,normal_parm_array[0].type,
@@ -1307,14 +1587,14 @@ int C_SetString(int object_id,local_var_type *local_vars,
       break;
 
    case TAG_RESOURCE :
-      r = GetResourceByID(s2_val.v.data);
-      if (r == NULL)
+      str = GetResourceStrByLanguageID(s2_val.v.data, ConfigInt(RESOURCE_LANGUAGE));
+      if (str == NULL)
       {
          bprintf("C_SetString can't set from invalid resource %i\n",s2_val.v.data);
          return NIL;
       }
       //bprintf("SetString string%i<--resource%i\n",s1_val.v.data,s2_val.v.data);
-      SetString(snod,r->resource_val,strlen(r->resource_val));
+      SetString(snod, (char*)str, strlen(str));
       break;
 
    case TAG_MESSAGE :
@@ -1376,7 +1656,6 @@ int C_AppendTempString(int object_id,local_var_type *local_vars,
 {
 	val_type s_val;
 	string_node *snod;
-	resource_node *r;
 	
 	s_val = RetrieveValue(object_id,local_vars,normal_parm_array[0].type,
 		normal_parm_array[0].value);
@@ -1401,16 +1680,18 @@ int C_AppendTempString(int object_id,local_var_type *local_vars,
 		bprintf("C_AppendTempString attempting to append temp string to itself!\n");
 		return NIL;
 		
-	case TAG_RESOURCE :
-		r = GetResourceByID(s_val.v.data);
-		if (r == NULL)
-		{
-			bprintf("C_AppendTempString can't set from invalid resource %i\n",s_val.v.data);
-			return NIL;
-		}
-		AppendTempString(r->resource_val,strlen(r->resource_val));
-		break;
-		
+   case TAG_RESOURCE:
+   {
+      const char *pStrConst;
+      pStrConst = GetResourceStrByLanguageID(s_val.v.data, ConfigInt(RESOURCE_LANGUAGE));
+      if (pStrConst == NULL)
+      {
+         bprintf("C_AppendTempString can't set from invalid resource %i\n", s_val.v.data);
+         return NIL;
+      }
+      AppendTempString(pStrConst, strlen(pStrConst));
+   }
+      break;
 	case TAG_DEBUGSTR :
 		{
 			kod_statistics *kstat = GetKodStats();
@@ -1659,7 +1940,7 @@ int C_IsTimer(int object_id,local_var_type *local_vars,
 		return ret_val.int_val;
 	}
 	
-	if (var_check.v.tag == TAG_TIMER || var_check.v.tag == TAG_NIL)
+	if (var_check.v.tag == TAG_TIMER)
 		ret_val.v.data = True;
 	else
 		ret_val.v.data = False;
@@ -2031,6 +2312,259 @@ int C_GetHeight(int object_id,local_var_type *local_vars,
 	return ret_val.int_val;
 }
 
+int C_GetHeightFloorBSP(int object_id, local_var_type *local_vars,
+	int num_normal_parms, parm_node normal_parm_array[],
+	int num_name_parms, parm_node name_parm_array[])
+{
+	val_type ret_val, room_val;
+	val_type row, col, finerow, finecol;
+	roomdata_node *r;
+
+	ret_val.v.tag = TAG_INT;
+	ret_val.v.data = false;
+
+	room_val = RetrieveValue(object_id, local_vars, normal_parm_array[0].type,
+		normal_parm_array[0].value);
+	row = RetrieveValue(object_id, local_vars, normal_parm_array[1].type,
+		normal_parm_array[1].value);
+	col = RetrieveValue(object_id, local_vars, normal_parm_array[2].type,
+		normal_parm_array[2].value);
+	finerow = RetrieveValue(object_id, local_vars, normal_parm_array[3].type,
+		normal_parm_array[3].value);
+	finecol = RetrieveValue(object_id, local_vars, normal_parm_array[4].type,
+		normal_parm_array[4].value);
+
+	if (room_val.v.tag != TAG_ROOM_DATA)
+	{
+		bprintf("C_GetHeightFloorBSP can't use non room %i,%i\n",
+			room_val.v.tag, room_val.v.data);
+		return ret_val.int_val;
+	}
+
+	if (row.v.tag != TAG_INT)
+	{
+		bprintf("C_GetHeightFloorBSP row can't use non int %i,%i\n",
+			row.v.tag, row.v.data);
+		return ret_val.int_val;
+	}
+
+	if (col.v.tag != TAG_INT)
+	{
+		bprintf("C_GetHeightFloorBSP col can't use non int %i,%i\n",
+			col.v.tag, col.v.data);
+		return ret_val.int_val;
+	}
+
+	if (finerow.v.tag != TAG_INT)
+	{
+		bprintf("C_GetHeightFloorBSP finerow can't use non int %i,%i\n",
+			finerow.v.tag, finerow.v.data);
+		return ret_val.int_val;
+	}
+
+	if (finecol.v.tag != TAG_INT)
+	{
+		bprintf("C_GetHeightFloorBSP finecol can't use non int %i,%i\n",
+			finecol.v.tag, finecol.v.data);
+		return ret_val.int_val;
+	}
+
+	r = GetRoomDataByID(room_val.v.data);
+	if (r == NULL)
+	{
+		bprintf("C_GetHeightFloorBSP can't find room %i\n", room_val.v.data);
+		return ret_val.int_val;
+	}
+
+	/* remember that kod uses 1-based arrays, and of course we don't */
+	ret_val.v.data = GetHeightFloorBSP(r,
+		row.v.data - 1, col.v.data - 1, finerow.v.data, finecol.v.data);
+
+	return ret_val.int_val;
+}
+
+
+int C_GetHeightCeilingBSP(int object_id, local_var_type *local_vars,
+	int num_normal_parms, parm_node normal_parm_array[],
+	int num_name_parms, parm_node name_parm_array[])
+{
+	val_type ret_val, room_val;
+	val_type row, col, finerow, finecol;
+	roomdata_node *r;
+
+	ret_val.v.tag = TAG_INT;
+	ret_val.v.data = false;
+
+	room_val = RetrieveValue(object_id, local_vars, normal_parm_array[0].type,
+		normal_parm_array[0].value);
+	row = RetrieveValue(object_id, local_vars, normal_parm_array[1].type,
+		normal_parm_array[1].value);
+	col = RetrieveValue(object_id, local_vars, normal_parm_array[2].type,
+		normal_parm_array[2].value);
+	finerow = RetrieveValue(object_id, local_vars, normal_parm_array[3].type,
+		normal_parm_array[3].value);
+	finecol = RetrieveValue(object_id, local_vars, normal_parm_array[4].type,
+		normal_parm_array[4].value);
+
+	if (room_val.v.tag != TAG_ROOM_DATA)
+	{
+		bprintf("C_GetHeightCeilingBSP can't use non room %i,%i\n",
+			room_val.v.tag, room_val.v.data);
+		return ret_val.int_val;
+	}
+
+	if (row.v.tag != TAG_INT)
+	{
+		bprintf("C_GetHeightCeilingBSP row can't use non int %i,%i\n",
+			row.v.tag, row.v.data);
+		return ret_val.int_val;
+	}
+
+	if (col.v.tag != TAG_INT)
+	{
+		bprintf("C_GetHeightCeilingBSP col can't use non int %i,%i\n",
+			col.v.tag, col.v.data);
+		return ret_val.int_val;
+	}
+
+	if (finerow.v.tag != TAG_INT)
+	{
+		bprintf("C_GetHeightCeilingBSP finerow can't use non int %i,%i\n",
+			finerow.v.tag, finerow.v.data);
+		return ret_val.int_val;
+	}
+
+	if (finecol.v.tag != TAG_INT)
+	{
+		bprintf("C_GetHeightCeilingBSP finecol can't use non int %i,%i\n",
+			finecol.v.tag, finecol.v.data);
+		return ret_val.int_val;
+	}
+
+	r = GetRoomDataByID(room_val.v.data);
+	if (r == NULL)
+	{
+		bprintf("C_GetHeightCeilingBSP can't find room %i\n", room_val.v.data);
+		return ret_val.int_val;
+	}
+
+	/* remember that kod uses 1-based arrays, and of course we don't */
+	ret_val.v.data = GetHeightCeilingBSP(r,
+		row.v.data - 1, col.v.data - 1, finerow.v.data, finecol.v.data);
+
+	return ret_val.int_val;
+}
+
+int C_LineOfSightBSP(int object_id, local_var_type *local_vars,
+	int num_normal_parms, parm_node normal_parm_array[],
+	int num_name_parms, parm_node name_parm_array[])
+{
+	val_type ret_val, room_val;
+	val_type row_source, col_source, finerow_source, finecol_source;
+	val_type row_dest, col_dest, finerow_dest, finecol_dest;
+	roomdata_node *r;
+
+	ret_val.v.tag = TAG_INT;
+	ret_val.v.data = false;
+
+	room_val = RetrieveValue(object_id, local_vars, normal_parm_array[0].type,
+		normal_parm_array[0].value);
+	row_source = RetrieveValue(object_id, local_vars, normal_parm_array[1].type,
+		normal_parm_array[1].value);
+	col_source = RetrieveValue(object_id, local_vars, normal_parm_array[2].type,
+		normal_parm_array[2].value);
+	finerow_source = RetrieveValue(object_id, local_vars, normal_parm_array[3].type,
+		normal_parm_array[3].value);
+	finecol_source = RetrieveValue(object_id, local_vars, normal_parm_array[4].type,
+		normal_parm_array[4].value);
+
+	row_dest = RetrieveValue(object_id, local_vars, normal_parm_array[5].type,
+		normal_parm_array[5].value);
+	col_dest = RetrieveValue(object_id, local_vars, normal_parm_array[6].type,
+		normal_parm_array[6].value);
+	finerow_dest = RetrieveValue(object_id, local_vars, normal_parm_array[7].type,
+		normal_parm_array[7].value);
+	finecol_dest = RetrieveValue(object_id, local_vars, normal_parm_array[8].type,
+		normal_parm_array[8].value);
+
+	if (room_val.v.tag != TAG_ROOM_DATA)
+	{
+		bprintf("C_LineOfSightBSP can't use non room %i,%i\n",
+			room_val.v.tag, room_val.v.data);
+		return ret_val.int_val;
+	}
+
+	if (row_source.v.tag != TAG_INT)
+	{
+		bprintf("C_LineOfSightBSP row source can't use non int %i,%i\n",
+			row_source.v.tag, row_source.v.data);
+		return ret_val.int_val;
+	}
+
+	if (col_source.v.tag != TAG_INT)
+	{
+		bprintf("C_LineOfSightBSP col source can't use non int %i,%i\n",
+			col_source.v.tag, col_source.v.data);
+		return ret_val.int_val;
+	}
+
+	if (finerow_source.v.tag != TAG_INT)
+	{
+		bprintf("C_LineOfSightBSP finerow source can't use non int %i,%i\n",
+			finerow_source.v.tag, finerow_source.v.data);
+		return ret_val.int_val;
+	}
+
+	if (finecol_source.v.tag != TAG_INT)
+	{
+		bprintf("C_LineOfSightBSP finecol source can't use non int %i,%i\n",
+			finecol_source.v.tag, finecol_source.v.data);
+		return ret_val.int_val;
+	}
+
+	if (row_dest.v.tag != TAG_INT)
+	{
+		bprintf("C_LineOfSightBSP row dest can't use non int %i,%i\n",
+			row_dest.v.tag, row_dest.v.data);
+		return ret_val.int_val;
+	}
+
+	if (col_dest.v.tag != TAG_INT)
+	{
+		bprintf("C_LineOfSightBSP col dest can't use non int %i,%i\n",
+			col_dest.v.tag, col_dest.v.data);
+		return ret_val.int_val;
+	}
+
+	if (finerow_dest.v.tag != TAG_INT)
+	{
+		bprintf("C_LineOfSightBSP finerow dest can't use non int %i,%i\n",
+			finerow_dest.v.tag, finerow_dest.v.data);
+		return ret_val.int_val;
+	}
+
+	if (finecol_dest.v.tag != TAG_INT)
+	{
+		bprintf("C_LineOfSightBSP finecol dest can't use non int %i,%i\n",
+			finecol_dest.v.tag, finecol_dest.v.data);
+		return ret_val.int_val;
+	}
+
+	r = GetRoomDataByID(room_val.v.data);
+	if (r == NULL)
+	{
+		bprintf("C_LineOfSightBSP can't find room %i\n", room_val.v.data);
+		return ret_val.int_val;
+	}
+
+	/* remember that kod uses 1-based arrays, and of course we don't */
+	ret_val.v.data = LineOfSightBSP(r,
+		row_source.v.data - 1, col_source.v.data - 1, finerow_source.v.data, finecol_source.v.data,
+		row_dest.v.data - 1, col_dest.v.data - 1, finerow_dest.v.data, finecol_dest.v.data);
+
+	return ret_val.int_val;
+}
+
 int C_CanMoveInRoomFine(int object_id,local_var_type *local_vars,
 						   int num_normal_parms,parm_node normal_parm_array[],
 						   int num_name_parms,parm_node name_parm_array[])
@@ -2102,6 +2636,138 @@ int C_CanMoveInRoomFine(int object_id,local_var_type *local_vars,
 	ret_val.v.data = CanMoveInRoomFine(r,row_source.v.data-1,col_source.v.data-1,
 		row_dest.v.data-1,col_dest.v.data-1);
 	
+	return ret_val.int_val;
+}
+
+int C_ChangeTextureBSP(int object_id, local_var_type *local_vars,
+    int num_normal_parms, parm_node normal_parm_array[],
+    int num_name_parms, parm_node name_parm_array[])
+{
+	val_type ret_val, room_val, server_id, new_texnum, flags;
+	roomdata_node *r;
+
+	ret_val.v.tag = TAG_INT;
+	ret_val.v.data = false;
+
+	room_val = RetrieveValue(object_id, local_vars, normal_parm_array[0].type,
+		normal_parm_array[0].value);
+	server_id = RetrieveValue(object_id, local_vars, normal_parm_array[1].type,
+		normal_parm_array[1].value);
+	new_texnum = RetrieveValue(object_id, local_vars, normal_parm_array[2].type,
+		normal_parm_array[2].value);
+	flags = RetrieveValue(object_id, local_vars, normal_parm_array[3].type,
+		normal_parm_array[3].value);
+
+	if (room_val.v.tag != TAG_ROOM_DATA)
+	{
+		bprintf("C_ChangeTextureBSP can't use non room %i,%i\n",
+			room_val.v.tag, room_val.v.data);
+		return ret_val.int_val;
+	}
+
+	if (server_id.v.tag != TAG_INT)
+	{
+		bprintf("C_ChangeTextureBSP serverid can't use non int %i,%i\n",
+			server_id.v.tag, server_id.v.data);
+		return ret_val.int_val;
+	}
+
+	if (new_texnum.v.tag != TAG_INT)
+	{
+		bprintf("C_ChangeTextureBSP new_texnum can't use non int %i,%i\n",
+			new_texnum.v.tag, new_texnum.v.data);
+		return ret_val.int_val;
+	}
+
+	if (flags.v.tag != TAG_INT)
+	{
+		bprintf("C_ChangeTextureBSP flags can't use non int %i,%i\n",
+			flags.v.tag, flags.v.data);
+		return ret_val.int_val;
+	}
+
+	r = GetRoomDataByID(room_val.v.data);
+	if (r == NULL)
+	{
+		bprintf("C_ChangeTextureBSP can't find room %i\n", room_val.v.data);
+		return ret_val.int_val;
+	}
+
+	BSPChangeTexture(&r->file_info, (unsigned short)server_id.v.data, 
+		(unsigned short)new_texnum.v.data, flags.v.data);
+
+	return ret_val.int_val;
+}
+
+int C_MoveSectorBSP(int object_id, local_var_type *local_vars,
+	int num_normal_parms, parm_node normal_parm_array[],
+	int num_name_parms, parm_node name_parm_array[])
+{
+	val_type ret_val, room_val, server_id, animation, height, speed;
+	roomdata_node *r;
+
+	ret_val.v.tag = TAG_INT;
+	ret_val.v.data = false;
+
+	room_val = RetrieveValue(object_id, local_vars, normal_parm_array[0].type,
+		normal_parm_array[0].value);
+	server_id = RetrieveValue(object_id, local_vars, normal_parm_array[1].type,
+		normal_parm_array[1].value);
+	animation = RetrieveValue(object_id, local_vars, normal_parm_array[2].type,
+		normal_parm_array[2].value);
+	height = RetrieveValue(object_id, local_vars, normal_parm_array[3].type,
+		normal_parm_array[3].value);
+	speed = RetrieveValue(object_id, local_vars, normal_parm_array[4].type,
+		normal_parm_array[4].value);
+
+	if (room_val.v.tag != TAG_ROOM_DATA)
+	{
+		bprintf("C_MoveSectorBSP can't use non room %i,%i\n",
+			room_val.v.tag, room_val.v.data);
+		return ret_val.int_val;
+	}
+
+	if (server_id.v.tag != TAG_INT)
+	{
+		bprintf("C_MoveSectorBSP serverid can't use non int %i,%i\n",
+			server_id.v.tag, server_id.v.data);
+		return ret_val.int_val;
+	}
+
+	if (animation.v.tag != TAG_INT)
+	{
+		bprintf("C_MoveSectorBSP animation can't use non int %i,%i\n",
+			animation.v.tag, animation.v.data);
+		return ret_val.int_val;
+	}
+
+	if (height.v.tag != TAG_INT)
+	{
+		bprintf("C_MoveSectorBSP height can't use non int %i,%i\n",
+			height.v.tag, height.v.data);
+		return ret_val.int_val;
+	}
+
+	if (speed.v.tag != TAG_INT)
+	{
+		bprintf("C_MoveSectorBSP speed can't use non int %i,%i\n",
+			speed.v.tag, speed.v.data);
+		return ret_val.int_val;
+	}
+
+	r = GetRoomDataByID(room_val.v.data);
+	if (r == NULL)
+	{
+		bprintf("C_MoveSectorBSP can't find room %i\n", room_val.v.data);
+		return ret_val.int_val;
+	}
+
+	bool is_floor = (animation.v.data == ANIMATE_FLOOR_LIFT);
+	float fheight = FINENESSKODTOROO((float)height.v.data);
+	float fspeed = 0.0f; // todo, but always instant anyways atm
+
+	BSPMoveSector(&r->file_info, (unsigned int)server_id.v.data, is_floor, fheight, fspeed);
+
 	return ret_val.int_val;
 }
 
@@ -2285,6 +2951,44 @@ int C_Nth(int object_id,local_var_type *local_vars,
 	}
 	
 	return Nth(n_val.v.data,list_val.v.data);
+}
+
+/*
+ * C_IsListMatch:  takes two lists, checks the values of each element
+ *    in the lists and returns TRUE if the elements are identical, FALSE
+ *    otherwise. Elements are identical if they have the same int_val
+ *    (tag AND data type) except in the case of TAG_LIST, in which case
+ *    the list contents must be identical but the list node number does not
+ *    need to be.
+ */
+int C_IsListMatch(int object_id,local_var_type *local_vars,
+            int num_normal_parms,parm_node normal_parm_array[],
+            int num_name_parms,parm_node name_parm_array[])
+{
+   val_type ret_val, list_one, list_two;
+   ret_val.v.tag = TAG_INT;
+   ret_val.v.data = False;
+
+   list_one = RetrieveValue(object_id,local_vars,normal_parm_array[0].type,
+      normal_parm_array[0].value);
+   if (list_one.v.tag != TAG_LIST)
+   {
+      bprintf("C_IsListMatch object %i can't check non-list one %i,%i\n",
+         object_id, list_one.v.tag, list_one.v.data);
+      return ret_val.int_val;
+   }
+
+   list_two = RetrieveValue(object_id,local_vars,normal_parm_array[1].type,
+      normal_parm_array[1].value);
+   if (list_two.v.tag != TAG_LIST)
+   {
+      bprintf("C_IsListMatch object %i can't check non-list two %i,%i\n",
+         object_id, list_two.v.tag, list_two.v.data);
+      return ret_val.int_val;
+   }
+
+   ret_val.v.data = IsListMatch(list_one.v.data, list_two.v.data);
+   return ret_val.int_val;
 }
 
 int C_List(int object_id,local_var_type *local_vars,
@@ -2529,6 +3233,23 @@ int C_FindListElem(int object_id,local_var_type *local_vars,
 	return ret_val.int_val;
 }
 
+/*
+ * C_GetTimeZoneOffset: returns the amount of seconds that must be added
+ *                      to local time to equal UTC. Conversely, subtracting
+ *                      this number from UTC (GetTime()) equals local time.
+ */
+int C_GetTimeZoneOffset(int object_id,local_var_type *local_vars,
+            int num_normal_parms,parm_node normal_parm_array[],
+            int num_name_parms,parm_node name_parm_array[])
+{
+   val_type ret_val;
+
+   ret_val.v.tag = TAG_INT;
+   ret_val.v.data = GetTimeZoneOffset();
+
+   return ret_val.int_val;
+}
+
 int C_GetTime(int object_id,local_var_type *local_vars,
 			  int num_normal_parms,parm_node normal_parm_array[],
 			  int num_name_parms,parm_node name_parm_array[])
@@ -2716,40 +3437,64 @@ int C_Bound(int object_id,local_var_type *local_vars,
 }
 
 int C_CreateTable(int object_id,local_var_type *local_vars,
-				  int num_normal_parms,parm_node normal_parm_array[],
-				  int num_name_parms,parm_node name_parm_array[])
+                  int num_normal_parms,parm_node normal_parm_array[],
+                  int num_name_parms,parm_node name_parm_array[])
 {
-	val_type ret_val;
-	
-	ret_val.v.tag = TAG_INT;
-	ret_val.v.data = CreateTable(2999);
-	
-	return ret_val.int_val;
-	
+   val_type ret_val, size_val;
+
+   if (num_normal_parms == 0)
+      size_val.v.data = 73;
+   else
+   {
+      size_val = RetrieveValue(object_id, local_vars, normal_parm_array[0].type,
+         normal_parm_array[0].value);
+      if (size_val.v.tag != TAG_INT)
+      {
+         bprintf("C_CreateTable can't use non-int %i,%i for size\n",
+            size_val.v.tag, size_val.v.data);
+         size_val.v.data = 73;
+      }
+   }
+
+   ret_val.v.tag = TAG_TABLE;
+   ret_val.v.data = CreateTable(size_val.v.data);
+
+   return ret_val.int_val;
 }
 
 int C_AddTableEntry(int object_id,local_var_type *local_vars,
 					int num_normal_parms,parm_node normal_parm_array[],
 					int num_name_parms,parm_node name_parm_array[])
 {
-	val_type int_val,key_val,data_val;
+	val_type table_val,key_val,data_val;
 	
 	
-	int_val = RetrieveValue(object_id,local_vars,normal_parm_array[0].type,
+	table_val = RetrieveValue(object_id,local_vars,normal_parm_array[0].type,
 		normal_parm_array[0].value);
-	if (int_val.v.tag != TAG_INT)
+	if (table_val.v.tag != TAG_TABLE)
 	{
-		bprintf("C_AddTableEntry can't use table id %i,%i\n",int_val.v.tag,int_val.v.data);
+		bprintf("C_AddTableEntry can't use table id %i,%i\n",table_val.v.tag,table_val.v.data);
 		return NIL;
 	}
 	
 	key_val = RetrieveValue(object_id,local_vars,normal_parm_array[1].type,
 		normal_parm_array[1].value);
 	
+   // Can't use key value that might change. Strings are okay,
+   // because the string itself is hashed.
+   if (key_val.v.tag == TAG_OBJECT || key_val.v.tag == TAG_LIST
+      || key_val.v.tag == TAG_TIMER || key_val.v.tag == TAG_TABLE
+      || key_val.v.tag == TAG_CLASS)
+   {
+      bprintf("C_AddTableEntry can't use key id %i,%i\n",
+         key_val.v.tag, key_val.v.data);
+      return NIL;
+   }
+
 	data_val = RetrieveValue(object_id,local_vars,normal_parm_array[2].type,
 		normal_parm_array[2].value);
 	
-	InsertTable(int_val.v.data,key_val,data_val);
+	InsertTable(table_val.v.data,key_val,data_val);
 	return NIL;
 }
 
@@ -2757,21 +3502,21 @@ int C_GetTableEntry(int object_id,local_var_type *local_vars,
 					int num_normal_parms,parm_node normal_parm_array[],
 					int num_name_parms,parm_node name_parm_array[])
 {
-	val_type int_val,key_val,ret_val;
+	val_type table_val,key_val,ret_val;
 	
 	
-	int_val = RetrieveValue(object_id,local_vars,normal_parm_array[0].type,
+	table_val = RetrieveValue(object_id,local_vars,normal_parm_array[0].type,
 		normal_parm_array[0].value);
-	if (int_val.v.tag != TAG_INT)
+	if (table_val.v.tag != TAG_TABLE)
 	{
-		bprintf("C_GetTableEntry can't use table id %i,%i\n",int_val.v.tag,int_val.v.data);
+		bprintf("C_GetTableEntry can't use table id %i,%i\n",table_val.v.tag,table_val.v.data);
 		return NIL;
 	}
 	
 	key_val = RetrieveValue(object_id,local_vars,normal_parm_array[1].type,
 		normal_parm_array[1].value);
 	
-	ret_val.int_val = GetTableEntry(int_val.v.data,key_val);
+	ret_val.int_val = GetTableEntry(table_val.v.data,key_val);
 	return ret_val.int_val;
 }
 
@@ -2779,21 +3524,21 @@ int C_DeleteTableEntry(int object_id,local_var_type *local_vars,
 					   int num_normal_parms,parm_node normal_parm_array[],
 					   int num_name_parms,parm_node name_parm_array[])
 {
-	val_type int_val,key_val;
+	val_type table_val,key_val;
 	
 	
-	int_val = RetrieveValue(object_id,local_vars,normal_parm_array[0].type,
+	table_val = RetrieveValue(object_id,local_vars,normal_parm_array[0].type,
 		normal_parm_array[0].value);
-	if (int_val.v.tag != TAG_INT)
+	if (table_val.v.tag != TAG_TABLE)
 	{
-		bprintf("C_DeleteTableEntry can't use table id %i,%i\n",int_val.v.tag,int_val.v.data);
+		bprintf("C_DeleteTableEntry can't use table id %i,%i\n",table_val.v.tag,table_val.v.data);
 		return NIL;
 	}
 	
 	key_val = RetrieveValue(object_id,local_vars,normal_parm_array[1].type,
 		normal_parm_array[1].value);
 	
-	DeleteTableEntry(int_val.v.data,key_val);
+	DeleteTableEntry(table_val.v.data,key_val);
 	return NIL;
 }
 
@@ -2801,21 +3546,38 @@ int C_DeleteTable(int object_id,local_var_type *local_vars,
 				  int num_normal_parms,parm_node normal_parm_array[],
 				  int num_name_parms,parm_node name_parm_array[])
 {
-	val_type int_val;
+	val_type table_val;
 	
-	
-	int_val = RetrieveValue(object_id,local_vars,normal_parm_array[0].type,
+	table_val = RetrieveValue(object_id,local_vars,normal_parm_array[0].type,
 		normal_parm_array[0].value);
-	if (int_val.v.tag != TAG_INT)
+	if (table_val.v.tag != TAG_TABLE)
 	{
-		bprintf("C_DeleteTable can't use table id %i,%i\n",int_val.v.tag,int_val.v.data);
+		bprintf("C_DeleteTable can't use table id %i,%i\n",table_val.v.tag,table_val.v.data);
 		return NIL;
 	}
-	
-	DeleteTable(int_val.v.data);
+	bprintf("C_DeleteTable is deprecated, tables are deleted at GC.\n");
+	//DeleteTable(table_val.v.data);
 	return NIL;
 }
 
+int C_IsTable(int object_id,local_var_type *local_vars,
+            int num_normal_parms,parm_node normal_parm_array[],
+            int num_name_parms,parm_node name_parm_array[])
+{
+   val_type check_val, ret_val;
+
+   ret_val.v.tag = TAG_INT;
+
+   check_val = RetrieveValue(object_id,local_vars,normal_parm_array[0].type,
+      normal_parm_array[0].value);
+
+   if (check_val.v.tag == TAG_TABLE && GetTableByID(check_val.v.data))
+      ret_val.v.data = True;
+   else
+      ret_val.v.data = False;
+
+   return ret_val.int_val;
+}
 
 int C_RecycleUser(int object_id,local_var_type *local_vars,
 				  int num_normal_parms,parm_node normal_parm_array[],
@@ -3084,17 +3846,17 @@ int C_RecordStat(int object_id,local_var_type *local_vars,
 				r_weapon = GetResourceByID(stat7.v.data);
 				
 				if (!r_who_damaged || !r_who_attacker || !r_weapon ||
-					!r_who_damaged->resource_val || !r_who_attacker->resource_val || !r_weapon->resource_val)
+					!r_who_damaged->resource_val[0] || !r_who_attacker->resource_val[0] || !r_weapon->resource_val[0])
 				{
 					bprintf("NULL string in C_RecordStat() for STAT_ASSESS_DAM");				
 				}
 				else
 				{					
 					MySQLRecordPlayerAssessDamage(
-						r_who_damaged->resource_val, 
-						r_who_attacker->resource_val, 
+						r_who_damaged->resource_val[0], 
+						r_who_attacker->resource_val[0], 
 						stat3.v.data, stat4.v.data, stat5.v.data, stat6.v.data, 
-						r_weapon->resource_val);
+						r_weapon->resource_val[0]);
 				}
 			}
 			break;
@@ -3112,41 +3874,38 @@ int C_GetSessionIP(int object_id,local_var_type *local_vars,
             int num_name_parms,parm_node name_parm_array[])
 {
    val_type session_id, temp, ret_val;
-   int ip;
+   session_node* session = NULL;
    
    session_id = RetrieveValue(object_id,local_vars,normal_parm_array[0].type,
       normal_parm_array[0].value);
       
    
-	if (session_id.v.tag != TAG_SESSION)
+   if (session_id.v.tag != TAG_SESSION)
    {
       bprintf("C_GetSessionIP can't use non session %i,%i\n",session_id.v.tag,session_id.v.data);
       return NIL;
    }
 
-   ip = GetIPBySessionId(session_id.v.data);
+   session = GetSessionByID(session_id.v.data);
+   
+   if (!session)
+   {
+      bprintf("C_GetSessionIP can't find session for %i,%i\n", session_id.v.tag, session_id.v.data);
+      return NIL;
+   }
    
    ret_val.int_val = NIL;
-   
    temp.v.tag = TAG_INT;
    
-   temp.v.data = (ip >> 24) & 0xFF;
-   ret_val.v.data = Cons(temp,ret_val);
-   ret_val.v.tag = TAG_LIST;
-   
-   temp.v.data = (ip >> 16) & 0xFF;
-   ret_val.v.data = Cons(temp,ret_val);
-   ret_val.v.tag = TAG_LIST;
-   
-   temp.v.data = (ip >> 8) & 0xFF;
-   ret_val.v.data = Cons(temp,ret_val);
-   ret_val.v.tag = TAG_LIST;
-   
-   temp.v.data = ip & 0xFF;
-   ret_val.v.data = Cons(temp,ret_val);
-   ret_val.v.tag = TAG_LIST;
-   	
-	return ret_val.int_val;  
+   // reverse the order, because the address is stored in network order in in6_addr
+   for (int i = sizeof(struct in6_addr) - 1; i >= 0; i--)
+   {
+      temp.v.data = session->conn.addr.u.Byte[i];
+      ret_val.v.data = Cons(temp, ret_val);
+      ret_val.v.tag = TAG_LIST;
+   }
+
+   return ret_val.int_val;
 }
 
 int C_SetClassVar(int object_id,local_var_type *local_vars,

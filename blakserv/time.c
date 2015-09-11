@@ -34,6 +34,28 @@ int GetTime()
 	return (int)time(NULL);
 }
 
+int GetTimeZoneOffset()
+{
+#ifdef BLAK_PLATFORM_WINDOWS
+   DWORD retval;
+   TIME_ZONE_INFORMATION t1;
+
+   retval = GetTimeZoneInformation(&t1);
+   if (retval == TIME_ZONE_ID_INVALID)
+   {
+      bprintf("GetTimeZoneOffset got invalid timezone data, returning 0.");
+      return 0;
+   }
+   if (retval == TIME_ZONE_ID_DAYLIGHT)
+      return (int)(t1.Bias + t1.DaylightBias) * 60;
+   else
+      return (int)t1.Bias * 60;
+#else
+   // Need to implement timezone offset for Linux.
+   return 0;
+#endif
+}
+
 const char * TimeStr(time_t time)
 {
 	struct tm *tm_time;
@@ -156,3 +178,33 @@ UINT64 GetMilliCount()
 #endif
 }
 
+double GetMicroCountDouble()
+{
+#ifdef BLAK_PLATFORM_WINDOWS
+
+   static LARGE_INTEGER microFrequency;
+   LARGE_INTEGER now;
+
+   if (microFrequency.QuadPart == 0)
+      QueryPerformanceFrequency(&microFrequency);
+
+   if (microFrequency.QuadPart == 0)
+   {
+      eprintf("GetMicroCount can't get frequency\n");
+      return 0;
+   }
+
+   QueryPerformanceCounter(&now);
+   return ((double)now.QuadPart * 1000000.0) / (double)microFrequency.QuadPart;
+
+#else
+
+   struct timeval tv;
+   gettimeofday(&tv, NULL);
+
+   double time_in_us = tv.tv_sec * 1000000.0 + tv.tv_usec;
+
+   return time_in_us;
+
+#endif
+}

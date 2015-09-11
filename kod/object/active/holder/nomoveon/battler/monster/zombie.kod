@@ -16,6 +16,8 @@ constants:
 
 resources:
 
+   include zombie.lkod
+
    zombie_koc_name_rsc = "ixleoc"
    zombie_name_rsc = "zombie"
    zombie_icon_rsc = zombie.bgf
@@ -70,12 +72,16 @@ properties:
 
    ptRevertControl = $
 
+   viReputationGroup = REP_UNDEAD
+
 messages:
 
    Constructed()
    {
       plResistances = [ [-ATCK_SPELL_UNHOLY, 50 ],
                         [-ATCK_SPELL_HOLY, -25 ] ];
+
+      vlReputationEnemies = [REP_FAROL];
 
       propagate;
    }

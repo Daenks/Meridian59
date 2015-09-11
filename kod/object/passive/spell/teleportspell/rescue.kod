@@ -16,6 +16,8 @@ constants:
 
 resources:
 
+   include rescue.lkod
+
    rescue_name_rsc = "rescue"
    rescue_icon_rsc = rescuico.bgf
    rescue_desc_rsc = \
@@ -72,7 +74,7 @@ messages:
    {
       % Can't cast just after attacking someone
       if Send(who,@GetLastPlayerAttackTime)
-         + Send(Send(SYS,@GetSettings),@TeleportAttackDelaySec)
+         + Send(SETTINGS_OBJECT,@TeleportAttackDelaySec)
          > GetTime()
       {
          Send(who,@MsgSendUser,#message_rsc=spell_too_soon_since_attacking);
@@ -102,7 +104,7 @@ messages:
       local iDelay;
 
       % Start with the base time.  Reduce time by spellpower.
-      iDelay = 1000 * Send(Send(SYS, @GetSettings), @RescueBaseDelaySec);
+      iDelay = 1000 * Send(SETTINGS_OBJECT, @RescueBaseDelaySec);
       iDelay = iDelay - (iSpellPower * iDelay) / 100 / 4;
 
       % Add a little delay in sometimes.
@@ -170,7 +172,7 @@ messages:
       % Default: Go to our home room.
       Post(who,@AdminGoToSafety);
 
-      for i in Send(Send(who,@GetOwner),@GetHolderActive)
+      foreach i in Send(Send(who,@GetOwner),@GetHolderActive)
       {
          each_obj = Send(Send(who,@GetOwner),@HolderExtractObject,#data=i);
          if IsClass(each_obj,&User)

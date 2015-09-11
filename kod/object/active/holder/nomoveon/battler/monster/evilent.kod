@@ -18,6 +18,8 @@ constants:
 
 resources:
 
+   include evilent.lkod
+
    EvilEnt_koc_name_rsc = "teotezmecya"
    EvilEnt_name_rsc = "diseased tree"
    EvilEnt_icon_rsc = res0003a.bgf
@@ -74,6 +76,8 @@ properties:
    piSpellPower = 90
    piMax_mana = 20
 
+   viReputationGroup = REP_FAROL
+   
 messages:
 
    Constructor(iTrunkColor=$, iLeavesColor=$)
@@ -109,6 +113,8 @@ messages:
                         [-ATCK_SPELL_FIRE, -10 ] ];
 
       plSpellBook = [ [SID_LIGHTNING, 5, 100] ];
+
+      vlReputationEnemies = [REP_UNDEAD];
 
       propagate;
    }

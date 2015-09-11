@@ -16,6 +16,8 @@ constants:
 
 resources:
 
+   include orccave.lkod
+
    CaveOrc_Koc_name_rsc = "utom"
    CaveOrc_name_rsc = "cave orc"
    CaveOrc_icon_rsc = OrcCave.bgf
@@ -67,6 +69,8 @@ properties:
 
    piAnimation = ANIM_NONE
 
+   viReputationGroup = REP_ORC
+   
 messages:
 
    Constructed()
@@ -75,6 +79,8 @@ messages:
                         [ATCK_WEAP_PIERCE, 20 ],
                         [ATCK_WEAP_SLASH, 25 ],
                         [-ATCK_SPELL_HOLY, -20 ] ];
+
+      vlReputationEnemies = [REP_PSAVAR, REP_KKAVAR, REP_CTAVAR];
 
       propagate;
    }
