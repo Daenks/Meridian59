@@ -83,7 +83,7 @@ void MainServer()
 	InitTimer();
 	InitSession();
 	InitResource();
-	InitRoomData();
+	InitRooms();
 	InitString();
 	InitUser();
 	InitAccount();
@@ -156,7 +156,8 @@ void MainExitServer()
 	ResetAccount();
 	ResetUser();
 	ResetString();
-	ResetRoomData();
+	// ExitRooms calls ResetRooms in addition to clearing the array memory.
+	ExitRooms();
 	ResetResource();
 	ResetTimer();
 	ResetList();
@@ -181,7 +182,7 @@ void MainReloadGameData()
    ResetAdminConstants();
    ResetUser();
    ResetString();
-   ResetRoomData();
+   ResetRooms();
    ResetLoadMotd();
    ResetLoadBof();
    ResetDLlist();

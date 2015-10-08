@@ -164,6 +164,12 @@ resources:
    Lm_bnkr_did_deposit = \
       "Thank you for your deposit.  You now have %i shillings in your account."
    Lm_bnkr_no_account = "You have no money to withdraw!"
+   Lm_bnkr_acct_full = \
+      "You have so many shillings stored here, that I'm afraid I have no "
+      "space to store any more!"
+   Lm_bnkr_acct_almost_full = \
+      "You have so many shillings stored here, that I'm afraid I can only "
+      "store %i more."
    Lm_bnkr_not_enough_withdraw = \
       "But you only have %i shillings in your account!"
    Lm_bnkr_not_enough_deposit = \
@@ -487,12 +493,15 @@ properties:
 
    % some monsters are created on the fly (ex: avar) we may need to set this at
    % runtime
-   viReputationGroup = REP_NEUTRAL
-   vlReputationEnemies = $
-   
+   piReputationGroup = REP_NEUTRAL
+   plReputationEnemies = $
+
+   % 20 seconds default for players, 60 for monsters
+   piHurtMeTime = 60000
+
 messages:
 
-   Constructor(template=FALSE, color=0, piSurvivalLevel=0)
+   Constructor(template=FALSE, color=0, piSurvivalLevel=0, iBrain = 0)
    "Simple enough, we create a monster. If they are questworthy, we note it."
    {
       local iStatPoints, iMin, iMax;
@@ -531,7 +540,14 @@ messages:
 
       Send(self,@TryAddToQuestEngine);
 
-      poBrain = Send(SYS,@FindBrainByNum,#num=viBrain_type);
+      if (iBrain > 0 AND iBrain <= BRAIN_MAX_NUM)
+      {
+         poBrain = Send(SYS,@FindBrainByNum,#num=iBrain);
+      }
+      else
+      {
+         poBrain = Send(SYS,@FindBrainByNum,#num=viBrain_type);
+      }
       
       piState = piState & ESTATE_ZERO_MASK;
       Send(poBrain,@MobConstructor,#mob=self);
@@ -1417,11 +1433,20 @@ messages:
       {
          Debug("Unreachable. Null poTarget","monster",self);
          poTarget = $;
-         Send(self,@EnterStateWait); 
+         Send(self,@EnterStateWait);
 
-         return; 
+         return;
       }
-      
+
+      % Victim phased out or is now in spectator mode, break aggro.
+      if IsClass(poTarget,&User)
+         AND Send(poTarget,@IsInCannotInteractMode)
+      {
+         Send(self,@EnterStateMove);
+
+         return;
+      }
+
       Send(poBrain,@GetAttackBehavior,#mob=self,#target=poTarget,
            #behavior=piBehavior);
       
@@ -1486,6 +1511,15 @@ messages:
       {
          %Debug("Unreachable. Null victim.");
          Send(self,@EnterStateWait);
+
+         return;
+      }
+
+      % Victim phased out or is now in spectator mode, break aggro.
+      if IsClass(oVictim,&User)
+         AND Send(oVictim,@IsInCannotInteractMode)
+      {
+         Send(self,@EnterStateMove);
 
          return;
       }
@@ -1776,36 +1810,35 @@ messages:
          }
       }
 
-	  % moved down at least a full row 
-	  if iNew_finerow >= FINENESS
-	  {
-		iNew_row = piRow + (iNew_finerow / FINENESS);
-		iNew_finerow = iNew_finerow MOD FINENESS;
-	  }
-	  
-	  % moved up at least a full row
-	  if iNew_finerow < 0
-	  {
-	    iNew_row = piRow - bound((-iNew_finerow / FINENESS), 1, 100);
-		iNew_finerow = FINENESS - (-iNew_finerow MOD FINENESS);
-	  }
-	  
-	  % moved right at least a full col 
-	  if iNew_finecol >= FINENESS
-	  {
-		iNew_col = piCol + (iNew_finecol / FINENESS);
-		iNew_finecol = iNew_finecol MOD FINENESS;
-	  }
-	  
-	  % moved left at least a full row
-	  if iNew_finecol < 0
-	  {
-	    iNew_col = piCol - bound((-iNew_finecol / FINENESS), 1, 100);
-		iNew_finecol = FINENESS - (-iNew_finecol MOD FINENESS);
-	  }
-	  
-      if Send(self,@ReqMonsterMove,#new_row=iNew_row,#new_col=iNew_col,
-	          #new_finerow=iNew_finerow,#new_finecol=iNew_finecol)
+      % moved down at least a full row 
+      if iNew_finerow >= FINENESS
+      {
+         iNew_row = piRow + (iNew_finerow / FINENESS);
+         iNew_finerow = iNew_finerow MOD FINENESS;
+      }
+      else if iNew_finerow < 0
+      {
+         % moved up at least a full row
+         iNew_row = piRow - bound((-iNew_finerow / FINENESS), 1, 100);
+         iNew_finerow = FINENESS - (-iNew_finerow MOD FINENESS);
+      }
+     
+      % moved right at least a full col 
+      if iNew_finecol >= FINENESS
+      {
+         iNew_col = piCol + (iNew_finecol / FINENESS);
+         iNew_finecol = iNew_finecol MOD FINENESS;
+      }
+      else if iNew_finecol < 0
+      {
+         % moved left at least a full row
+         iNew_col = piCol - bound((-iNew_finecol / FINENESS), 1, 100);
+         iNew_finecol = FINENESS - (-iNew_finecol MOD FINENESS);
+      }
+
+      if (NOT (piBehavior & AI_MOVE_WALKTHROUGH_WALLS))
+         OR Send(self,@ReqMonsterMove,#new_row=iNew_row,#new_col=iNew_col,
+                  #new_finerow=iNew_finerow,#new_finecol=iNew_finecol)
       {
          Send(self,@MonsterOrient,#new_row=iNew_row,#new_col=iNew_col,
               #new_finerow=iNew_finerow,#new_finecol=iNew_finecol);
@@ -1871,30 +1904,35 @@ messages:
 
    DoGoTowardsLocation()
    {
-      piPatrolAttempts = piPatrolAttempts + 1;
+      local iDist2;
 
-      Send(self,@MoveTowardsCoords,
-            #iRow=piTargetLocationRow,
-            #iCol=piTargetLocationCol,
-            #iFineRow=piTargetLocationFineRow,
-            #iFineCol=piTargetLocationFineCol);
+      % see how far away we are (2D only)
+      iDist2 = Send(self, @SquaredFineDistanceToLocation,
+                    #row=piTargetLocationRow,
+                    #col=piTargetLocationCol,
+                    #fine_row=piTargetLocationFineRow,
+                    #fine_col=piTargetLocationFineCol);
 
-      % for now just reaching the row and col is good enough
-      % fineness is ignored
-      if ((piRow = piTargetLocationRow)
-         AND (piCol = piTargetLocationCol))
+      % more than 64 fine-units far away (64*64=4096)
+      % and not yet reached maxappempts
+      if iDist2 > 4096 AND piPatrolAttempts < 500
       {
+         % try get closer
+         Send(self,@MoveTowardsCoords,
+              #iRow=piTargetLocationRow,
+              #iCol=piTargetLocationCol,
+              #iFineRow=piTargetLocationFineRow,
+              #iFineCol=piTargetLocationFineCol);
+
+         piPatrolAttempts = piPatrolAttempts + 1;
+      }
+      else
+      {
+         % close enough
          Send(self,@SetBehaviorFlag,#flag=AI_HAS_TARGET_LOCATION,#value=FALSE);
          piPatrolAttempts = 0;
       }
-
-      % after a while just give up
-      if (piPatrolAttempts >= 500)
-      {
-         Send(self,@SetBehaviorFlag,#flag=AI_HAS_TARGET_LOCATION,#value=FALSE);
-         piPatrolAttempts = 0;
-      }
-
+ 
       return;
    }
 
@@ -2196,8 +2234,8 @@ messages:
       {
          foreach i in Send(poOwner,@GetHolderActive)
          {
-            each_obj=Send(poOwner,@HolderExtractObject,#data=i);
-            if isClass(each_obj,&User)
+            each_obj = First(i);
+            if IsClass(each_obj,&User)
                AND each_obj <> what
                AND Send(each_obj,@GetKillTarget)=self
             {
@@ -2223,6 +2261,8 @@ messages:
          Post(what,@MsgPlayerHitResisted,#what=what,#resistance=iResist,
               #target=self,#color_rsc=monster_color_blue_rsc);
       }
+      
+      Send(self,@AddHurtMeRecently,#who=what,#amount=iDamage);
 
       return iDamage;
    }
@@ -2487,153 +2527,23 @@ messages:
 
    %%% Movement messages
 
-   TryDirection(dir = $, face_target= FALSE, face_away=FALSE, to_master=FALSE)
-   "Try to take a single step in direction 'dir' where"
-   "e=0, ne=1, n=2, nw=3, w=4, sw=5, s=6, se=7"
-   {
-      local iNew_row, iNew_col, iNew_finerow, iNew_finecol, iLong_step;
-
-      iNew_row = piRow;
-      iNew_col = piCol;
-
-      if dir = 0
-      {
-         iNew_finerow = piFine_row + 16;
-         iNew_finecol = piFine_col;
-         iLong_step = FALSE;
-      }
-      else if dir = 1
-      {
-         iNew_finerow = piFine_row + 16;
-         iNew_finecol = piFine_col + 16;
-         iLong_step = TRUE;
-      }
-      else if dir = 2
-      {
-         iNew_finerow = piFine_row;
-         iNew_finecol = piFine_col + 16;
-         iLong_step = FALSE;
-      }
-      else if dir = 3
-      {
-         iNew_finerow = piFine_row - 16;
-         iNew_finecol = piFine_col + 16;
-         iLong_step = TRUE;
-      }
-      else if dir = 4
-      {
-         iNew_finerow = piFine_row - 16;
-         iNew_finecol = piFine_col;
-         iLong_step = FALSE;
-      }
-      else if dir = 5
-      {
-         iNew_finerow = piFine_row - 16;
-         iNew_finecol = piFine_col - 16;
-         iLong_step = TRUE;
-      }
-      else if dir = 6
-      {
-         iNew_finerow = piFine_row;
-         iNew_finecol = piFine_col - 16;
-         iLong_step = FALSE;
-      }
-      else if dir = 7
-      {
-         iNew_finerow = piFine_row + 16;
-         iNew_finecol = piFine_col - 16;
-         iLong_step = TRUE;
-      }
-
-      if iNew_finerow >= FINENESS
-      {
-         % moved down at least a full row
-         iNew_row = piRow + (iNew_finerow / FINENESS);
-         iNew_finerow = iNew_finerow MOD FINENESS;
-      }
-      else if iNew_finerow < 0
-      {
-         % moved up at least a full row
-         iNew_row = piRow - Bound((-iNew_finerow / FINENESS), 1, 100);
-         iNew_finerow = FINENESS - (-iNew_finerow MOD FINENESS);
-      }
-
-      if iNew_finecol >= FINENESS
-      {
-         % moved right at least a full col 
-         iNew_col = piCol + (iNew_finecol / FINENESS);
-         iNew_finecol = iNew_finecol MOD FINENESS;
-      }
-      else if iNew_finecol < 0
-      {
-         % moved left at least a full row
-         iNew_col = piCol - Bound((-iNew_finecol / FINENESS), 1, 100);
-         iNew_finecol = FINENESS - (-iNew_finecol MOD FINENESS);
-      }
-
-      if iLong_step
-      {
-         piState = piState | ESTATE_LONG_STEP;
-      }
-      else
-      {
-         piState = piState & ESTATE_LSTEP_MASK;
-      }
-
-      if Send(self,@ReqMonsterMove,#new_row=iNew_row,#new_col=iNew_col,
-               #new_finerow=iNew_finerow,#new_finecol=iNew_finecol)
-      {
-         Send(self,@MonsterOrient,#new_row=iNew_row,#new_col=iNew_col,
-               #new_finerow=iNew_finerow,#new_finecol=iNew_finecol,
-               #face_target=face_target,#face_away=face_away);
-
-         if Send(poOwner,@ReqSomethingMoved,#what=self,
-                  #new_row=iNew_row,#new_col=iNew_col,
-                  #server_validate=(NOT(piBehavior&AI_MOVE_WALKTHROUGH_WALLS)),
-                  #new_finerow=iNew_finerow,#new_finecol=iNew_finecol)
-         {
-            Send(poOwner,@SomethingMoved,#what=self,#speed=viSpeed,
-                  #new_row=iNew_row,#new_col=iNew_col,
-                  #fine_row=iNew_finerow,#fine_col=iNew_finecol,
-                  #non_monsters_only=TRUE);
-
-            % Turn to face target
-            Send(self,@MonsterOrient,#new_row=iNew_row,#new_col=iNew_col,
-                  #new_finerow=iNew_finerow,#new_finecol=iNew_finecol,
-                  #face_target=face_target,#face_away=face_away);
-
-            return TRUE;
-         }
-      }
-
-      return FALSE;
-   }
-
    MoveTowards(oTarget = $, face_target=FALSE, face_away=FALSE,
                to_master=FALSE)
    {
-      local drow, dcol;
-
       if oTarget = $ 
       { 
          Debug("Bad info passed to MoveTowards!");
          return FALSE; 
       }
 
-      if poOwner <> Send(oTarget,@GetOwner)
-      { 
-         return FALSE; 
-      }
-
-      % calculate square delta in highres-grid
-      drow = ((Send(oTarget,@GetRow) * FINENESS) + Send(oTarget,@GetFineRow)) / 16;
-      dcol = ((Send(oTarget,@GetCol) * FINENESS) + Send(oTarget,@GetFineCol)) / 16;
-      drow = drow - (((piRow * FINENESS) + piFine_row) / 16);
-      dcol = dcol - (((piCol * FINENESS) + piFine_col) / 16);
-
-      return Send(self,@MoveInDirection,#row_diff=drow,#col_diff=dcol,
-                  #face_target=face_target,#face_away=face_away,
-                  #to_master=to_master);
+      return Send(self, @MoveTowardsCoords,
+                   #iRow=Send(oTarget,@GetRow),
+                   #iCol=Send(oTarget,@GetCol),
+                   #iFineRow=Send(oTarget,@GetFineRow),
+                   #iFineCol=Send(oTarget,@GetFineCol),
+                   #face_target=face_target,
+                   #face_away=face_away,
+                   #to_master=to_master);
    }
 
    MoveAway(oTarget = $, face_target=FALSE, face_away=FALSE)
@@ -2648,182 +2558,24 @@ messages:
 
       if poOwner <> Send(oTarget,@GetOwner)
       {
-            return FALSE;
-      }
-
-	  % calculate square delta in highres-grid
-      drow = ((Send(oTarget,@GetRow) * FINENESS) + Send(oTarget,@GetFineRow)) / 16;
-      dcol = ((Send(oTarget,@GetCol) * FINENESS) + Send(oTarget,@GetFineCol)) / 16;
-      drow = drow - (((piRow * FINENESS) + piFine_row) / 16);
-      dcol = dcol - (((piCol * FINENESS) + piFine_col) / 16);
-	  
-      return Send(self,@MoveInDirection,#row_diff=-drow,#col_diff=-dcol,
-                  #face_target=face_target,#face_away=face_away);
-   }
-
-   MoveInDirection(row_diff = $,col_diff = $, face_target = FALSE,
-                   face_away=FALSE, to_master=FALSE)
-   "As I said afore, Id really like this to move the monster on 16finerow"
-   "increments instead of the way it is now. If this happened, then the"
-   "movement timer/chase timer's would need to be increased to make up for"
-   "the lack of distance travelled. This is called from the ChaseTimer."
-   "It should probably be combined with DoRandomWalk."
-   {
-      local i, iAtan, iDir, iTry_dir, iRand,   iIter;
-      
-      if poOwner=$ OR row_diff=$ OR col_diff=$
-      {
          return FALSE;
       }
 
-      % Figure out which direction we need to move.
-      % Directions: e=0, ne=1, n=2, nw=3, w=4, sw=5, s=6, se=7
+      % calculate square delta in fineness
+      % vector from oTarget to self
+      drow = (piRow * FINENESS) + piFine_row;
+      dcol = (piCol * FINENESS) + piFine_col;
+      drow = drow - ((Send(oTarget,@GetRow) * FINENESS) + Send(oTarget,@GetFineRow));
+      dcol = dcol - ((Send(oTarget,@GetCol) * FINENESS) + Send(oTarget,@GetFineCol));
 
-      % Due north or due south are special cases.
-      if row_diff = 0
-      {
-         if col_diff > 0
-         {
-            iDir = 2;
-         }
-         else
-         {
-            iDir = 6;
-         }
-      }
-      else
-      {
-         iAtan = 1000 * col_diff / row_diff;
-      }
-
-      if row_diff > 0
-      {
-         % right half-plane
-         if iAtan >= 2414
-         {
-            iDir = 2;
-         }
-         else if iAtan >= 414
-         {
-            iDir = 1;
-         }
-         else if iAtan >= -414
-         {
-            iDir = 0;
-         }
-         else if iAtan >= -2414
-         {
-            iDir = 7;
-         }
-         else
-         {
-            iDir = 6;
-         }
-      }
-      else if row_diff < 0
-      {
-         % left half-plane
-         if iAtan >= 2414
-         {
-            iDir = 6;
-         }
-         else if iAtan >= 414
-         {
-            iDir = 5;
-         }
-         else if iAtan >= -414
-         {
-            iDir = 4;
-         }
-         else if iAtan >= -2414
-         {
-            iDir = 3;
-         }
-         else
-         {
-            iDir = 2;
-         }
-      }
-
-      iTry_dir = iDir;
-      if Send(self,@TryDirection,#dir=iTry_dir,
-               #face_target=face_target,#face_away=face_away)
-      {
-         % we successfully moved in our direction of choice
-         piState = piState & ESTATE_ZERO_MASK;
-
-         return TRUE;
-      }
-      else
-      {
-         % Try each available direction in a particular order
-         % (however, we do *not* allow motion 180 degrees from target)
-         if piState & ESTATE_AVOIDING
-         {
-            if piState & ESTATE_CLOCKWISE
-            {
-               % continue to try only clockwise directions
-               iIter = 321;
-            }
-            else
-            {
-               % counter-clockwise
-               iIter = 567;
-            }
-         }
-         else
-         {
-            % Use a "random" bit to decide search pattern
-            % Either way, both clockwise and counter-clock directions
-            % will be tried as necessary
-            if row_diff mod 2
-            {
-               iIter = 536271;
-            }
-            else
-            {
-               iIter = 352617;
-            }
-         }
-
-         % Implementor's notes:  Xian Darken originally used list nodes here
-         %  temporarily.  For example, the above list was [7,1,6,2,5,3].  Note
-         %  how  they are listed in reverse order from the start.  However,
-         %  this seemed to be eating up gobs and gobs of memory, so I decided
-         %  to use an integer instead, taking the ones digit and dividing by
-         %  ten until the number is below 0.
-
-         while iIter > 0
-         {
-            i = iIter mod 10;
-            iTry_dir = ( iDir + i ) mod 8;
-            if Send(self,@TryDirection,#dir=iTry_dir,#face_target=face_target,
-                    #face_away=face_away,#to_master=to_master) 
-            {
-               piState = piState | ESTATE_AVOIDING;
-               if i < 4
-               {
-                  piState = piState | ESTATE_CLOCKWISE;
-               }
-               else
-               {
-                  piState = piState & ESTATE_CCLK_MASK;
-               }
-
-               return TRUE;
-            }
-
-            iIter = iIter/10;
-         }
-
-         % we couldn't find an acceptable move
-         piState = piState & ESTATE_AVOID_MASK;
-
-         return FALSE;
-      }
-
-      % Never reached
-      return TRUE;
+      % add vector from oTarget to self on our position and try move there
+      return Send(self, @MoveTowardsCoords,
+                   #iRow=(piRow + (drow / FINENESS)),
+                   #iCol=(piCol + (dcol / FINENESS)),
+                   #iFineRow=(piFine_row + (drow MOD FINENESS)),
+                   #iFineCol=(piFine_col + (dcol MOD FINENESS)),
+                   #face_target=face_target,
+                   #face_away=face_away);
    }
 
    ReqMonsterMove(new_row = $,new_col = $,new_finerow = FINENESS_HALF,
@@ -2894,28 +2646,66 @@ messages:
       return;
    }
 
-   MoveTowardsCoords(iRow=$, iCol=$, iFineRow=0, iFineCol=0, face_target=FALSE,
-                     face_away=FALSE, to_master=FALSE)
+   MoveTowardsCoords(iRow=$, iCol=$, iFineRow=FINENESS_HALF, iFineCol=FINENESS_HALF,
+                     face_target=FALSE, face_away=FALSE, to_master=FALSE)
    {
-      local drow, dcol;
+      local iState, iMoveFlags;
 
       if (iRow = $ or iCol = $)
       {
          return;
       }
 
-      % calculate square delta in highres-grid
-      drow = ((iRow * FINENESS) + iFineRow) / 16;
-      dcol = ((iCol * FINENESS) + iFineCol) / 16;
-      drow = drow - (((piRow * FINENESS) + piFine_row) / 16);
-      dcol = dcol - (((piCol * FINENESS) + piFine_col) / 16);
+      % Mobs that can move outside the BSP tree set this field which is then
+      % combined with the state flags and sent to GetStepTowardsBSP. These
+      % moves aren't checked against room geometry.
+      iMoveFlags = 0;
+      if (piBehavior & AI_MOVE_WALKTHROUGH_WALLS)
+      {
+         iMoveFlags = iMoveFlags | MSTATE_MOVE_OUTSIDE_BSP;
+      }
 
-      return Send(self,@MoveInDirection,#row_diff=drow,#col_diff=dcol,
-                  #face_target=face_target,#face_away=face_away,
-                  #to_master=to_master);
+      % query where to step next
+      % note: these need some persistent info across
+      % calls which are stored in piState (flags from old KOD code)
+      iState = GetStepTowardsBSP(
+                Send(poOwner, @GetRoomData),
+                piRow, piCol, piFine_row, piFine_col,
+                *iRow, *iCol, *iFineRow, *iFineCol,
+                piState | iMoveFlags, self);
+
+      if iState <> $
+      {
+         piState = iState;
+
+         % debug("step",iRow,iCol,iFineRow,iFineCol);
+	  
+         if (NOT (piBehavior & AI_MOVE_WALKTHROUGH_WALLS))
+             OR Send(self,@ReqMonsterMove,#new_row=iRow,#new_col=iCol,
+                     #new_finerow=iFineRow,#new_finecol=iFineCol)
+         {
+            Send(self,@MonsterOrient,#new_row=iRow,#new_col=iCol,
+                 #new_finerow=iFineRow,#new_finecol=iFineCol,
+                 #face_target=face_target,#face_away=face_away);
+		
+            Send(poOwner,@SomethingMoved,#what=self,#speed=viSpeed,
+                 #new_row=iRow,#new_col=iCol,
+                 #fine_row=iFineRow,#fine_col=iFineCol,
+                 #non_monsters_only=TRUE);
+
+            % Turn to face target
+            Send(self,@MonsterOrient,#new_row=iRow,#new_col=iCol,
+                 #new_finerow=iFineRow,#new_finecol=iFineCol,
+                 #face_target=face_target,#face_away=face_away);
+
+         return TRUE;		
+         }
+      }
+
+      return FALSE;
    }
 
-   GotoCoords(iRow=$,iCol=$,iFineRow=0,iFineCol=0)
+   GotoCoords(iRow=$,iCol=$,iFineRow=FINENESS_HALF,iFineCol=FINENESS_HALF)
    "Move to a specific row and column. warning! fineness really"
    "isn't accurate as the monster will stop when it reaches the destination"
    "row and column"
@@ -3679,13 +3469,13 @@ messages:
          % we found an applicable random trigger, find a random user.
          iNum = 0;
          oTarget = $;
-         foreach i in Send(Send(self,@GetOwner),@GetHolderActive)
+         foreach i in Send(poOwner,@GetHolderActive)
          {
-            if isClass(Send(poOwner,@HolderExtractObject,#data=i),&User)
+            if IsClass(First(i),&User)
             {
                if Random(0,iNum) = 0
                {
-                  oTarget=Nth(i,1);
+                  oTarget = First(i);
                }
 
                iNum = iNum + 1;
@@ -3924,7 +3714,7 @@ messages:
             Send(EVENTENGINE_OBJECT,@MonsterKilled,#dead_monster=self,
                   #killing_player=what,#corpse=oBody);
 
-            if (viReputationGroup <> REP_NEUTRAL
+            if (piReputationGroup <> REP_NEUTRAL
                AND Send(SETTINGS_OBJECT,@GetMonsterFactionEnabled))
             {
                hReputation = Send(what,@GetReputationHash);
@@ -3943,28 +3733,28 @@ messages:
                % now actually do the rep chenge unless there is no hash
                if (hReputation <> $)
                {
-                  val=GetTableEntry(hReputation,viReputationGroup);
+                  val=GetTableEntry(hReputation,piReputationGroup);
                   if (val <> $)
                   {
                      --val;
                      if (val >= -20000)
                      {
-                        DeleteTableEntry(hReputation,viReputationGroup);
-                        AddTableEntry(hReputation,viReputationGroup,val);
+                        DeleteTableEntry(hReputation,piReputationGroup);
+                        AddTableEntry(hReputation,piReputationGroup,val);
                      }
                   }
                   else
                   {
-                     AddTableEntry(hReputation,viReputationGroup,-1);
+                     AddTableEntry(hReputation,piReputationGroup,-1);
                   }
 
                   Send(what,@MsgSendUser,
                      #message_rsc=monster_faction_negative_msg,
                      #parm1=Send(self,@GetMonsterFactionRSC,
-                              #faction=viReputationGroup));
+                              #faction=piReputationGroup));
 
                   % Adjust reputation with enemies of this monster
-                  foreach i in vlReputationEnemies
+                  foreach i in plReputationEnemies
                   {
                      val=GetTableEntry(hReputation,i);
                      if (val <> $)
@@ -4514,7 +4304,7 @@ messages:
 
    BankDeposit(who=$, amount = 0)
    {
-      local oMoney, oBank;
+      local oMoney, oBank, iBankAmt;
 
       if NOT Send(self,@MobIsBanker)
       {
@@ -4533,10 +4323,8 @@ messages:
          return;
       }
 
-      oBank = Send(SYS,@FindBankByNum,#num=Send(self,@GetBankNum));
-
       oMoney = Send(who,@GetMoneyObject);
-      if oMoney = $ 
+      if oMoney = $
       {
          Post(poOwner,@SomeoneSaid,#what=self,#type=SAY_RESOURCE,
               #string=Lm_bnkr_not_enough_deposit,#parm1=0);
@@ -4552,11 +4340,38 @@ messages:
 
          return;
       }
-      
+
+      oBank = Send(SYS,@FindBankByNum,#num=Send(self,@GetBankNum));
+      iBankAmt = Send(oBank,@GetAccount,#what=who);
+
+      % Check for integer overflow.
+      if (iBankAmt = MAX_KOD_INT)
+      {
+         Post(poOwner,@SomeoneSaid,#what=self,#type=SAY_RESOURCE,
+              #string=Lm_bnkr_acct_full);
+
+         return;
+      }
+      else if (iBankAmt + amount < 0)
+      {
+         amount = MAX_KOD_INT - iBankAmt;
+         % Re-check amount, just to be sure.
+         if Send(oMoney,@GetValue) < amount
+         {
+            Debug("Error modifying bank deposit amount for ",
+                  Send(who,@GetTrueName),"amt: ",amount," bank amt: ",iBankAmt);
+
+            return;
+         }
+
+         Post(poOwner,@SomeoneSaid,#what=self,#type=SAY_RESOURCE,
+               #string=Lm_bnkr_acct_almost_full,#parm1=amount);
+      }
+
       Send(oMoney,@SubtractNumber,#number=amount);
       Send(oBank,@DepositAccount,#what=who,#amount=amount);
 
-      Send(who,@SomeoneSaid,#what=self,#type=SAY_RESOURCE,
+      Post(who,@SomeoneSaid,#what=self,#type=SAY_RESOURCE,
            #string=Lm_bnkr_did_deposit,
            #parm1=Send(oBank,@GetAccount,#what=who));
 
@@ -4572,9 +4387,9 @@ messages:
 
    BankWithdraw(who = $, amount = 0)
    {
-      local i, iFlag, iAmount, oMoney, oBank, iCan_hold;
+      local iPlayerAmt, iBankAmt, oMoney, oBank;
 
-      if not Send(self,@MobIsBanker)
+      if NOT Send(self,@MobIsBanker)
       {
          return;
       }
@@ -4591,10 +4406,10 @@ messages:
          return;
       }
 
-      oBank=Send(SYS,@FindBankByNum,#num=Send(self,@GetBankNum));
-      iAmount = Send(oBank,@WithdrawAccount,#what=who);
+      oBank = Send(SYS,@FindBankByNum,#num=Send(self,@GetBankNum));
+      iBankAmt = Send(oBank,@WithdrawAccount,#what=who);
 
-      if iAmount = 0
+      if iBankAmt = 0
       {
          Post(who,@SomeoneSaid,#what=self,#string=Lm_bnkr_no_account,
               #type=SAY_RESOURCE);
@@ -4602,41 +4417,13 @@ messages:
          return;
       }
 
-      if amount > iAmount
+      if amount > iBankAmt
       {
-         Send(oBank,@DepositAccount,#what=who,#amount=iAmount);
+         Send(oBank,@DepositAccount,#what=who,#amount=iBankAmt);
          Post(who,@SomeoneSaid,#what=self,#type=SAY_RESOURCE,
-              #string=Lm_bnkr_not_enough_withdraw,#parm1=iAmount);
+              #string=Lm_bnkr_not_enough_withdraw,#parm1=iBankAmt);
 
          return;
-      }
-
-      oMoney = Send(SYS,@GetSystemMoneyObject);
-      if oMoney = $
-      {
-         oMoney = Create(&Money,#number=amount);
-      }
-
-      iCan_hold = Send(who,@GetNumberCanHold,#what=oMoney);
-
-      if iCan_hold = INFINITE_COUNT
-      {
-         iCan_hold = amount;
-      }
-
-      if iCan_hold = 0
-      {
-         Post(who,@SomeoneSaid,#what=self,#string=Lm_bnkr_player_all_full,
-              #type=SAY_RESOURCE);
-
-         return;
-      }
-
-      if iCan_hold < amount
-      {
-         Post(who,@SomeoneSaid,#what=self,#string=Lm_bnkr_player_full,
-              #type=SAY_RESOURCE,#parm1=iCan_hold);
-         amount = iCan_hold;
       }
 
       oMoney = Send(who,@GetMoneyObject);
@@ -4645,14 +4432,41 @@ messages:
          oMoney = Create(&Money,#number=amount);
          Send(who,@NewHold,#what=oMoney);
       }
-      else
+      else if (Send(oMoney,@GetNumber) + amount) <= 0
       {
-         Send(oMoney,@AddNumber,#number=amount);
+         iPlayerAmt = Send(oMoney,@GetNumber);
+         if iPlayerAmt = MAX_KOD_INT
+         {
+            Send(oBank,@DepositAccount,#what=who,#amount=iBankAmt);
+            Post(who,@SomeoneSaid,#what=self,#string=Lm_bnkr_player_all_full,
+                  #type=SAY_RESOURCE);
+
+            return;
+         }
+         else if (iPlayerAmt + amount) <= 0
+         {
+            amount = MAX_KOD_INT - iPlayerAmt;
+            Post(who,@SomeoneSaid,#what=self,#string=Lm_bnkr_player_full,
+                  #type=SAY_RESOURCE,#parm1=amount);
+
+            if amount > iBankAmt
+            {
+               Debug("Error giving player ",Send(who,@GetTrueName),amount,
+                  " shillings from total ",iBankAmt,"!. Player has ",iPlayerAmt);
+               Send(oBank,@DepositAccount,#what=who,#amount=iBankAmt);
+
+               return;
+            }
+         }
       }
 
-      Send(oBank,@DepositAccount,#what=who,#amount=iAmount-amount);
-      Send(who,@SomeoneSaid,#what=self,#type=SAY_RESOURCE,
-           #string=Lm_bnkr_did_withdraw,#parm1=amount);
+      Send(oMoney,@AddNumber,#number=amount);
+      Send(oBank,@DepositAccount,#what=who,#amount=iBankAmt-amount);
+
+      % Send this message even if we gave the almost full one - players are
+      % used to seeing this message on a successful transaction.
+      Post(who,@SomeoneSaid,#what=self,#type=SAY_RESOURCE,
+            #string=Lm_bnkr_did_withdraw,#parm1=amount);
 
       Send(self,@AffectMood,#why=MOODMOD_BANK_WITHDRAWAL);
 
@@ -5116,8 +4930,8 @@ messages:
 
       foreach i in Send(poOwner,@GetHolderActive)
       {
-         each_obj=Send(poOwner,@HolderExtractObject,#data=i);
-         if isClass(each_obj,&User)
+         each_obj = First(i);
+         if IsClass(each_obj,&User)
             AND Send(each_obj,@GetKillTarget) = self
          {
             Post(each_obj,@MsgSendUser,#what=self,#message_rsc=rDamage_report,
@@ -5151,7 +4965,7 @@ messages:
 
          foreach i in Send(poOwner,@GetHolderActive)
          {
-            each_obj=Send(poOwner,@HolderExtractObject,#data=i);
+            each_obj = First(i);
             if IsClass(each_obj,&User)
                AND Send(each_obj,@GetKillTarget) = self
             {
@@ -5344,77 +5158,54 @@ messages:
       return;
    }
 
-   % The IsObject... functions should call IsItemType with the ITEMTYPE_
-   %  constants.
-   
    IsObjectWeapon(what=$)
    {
-      if isClass(what,&Weapon)
-      {
-         return TRUE;
-      }
-
-      return FALSE;
+      return Send(what,@IsItemType,#type=ITEMTYPE_WEAPON);
    }
 
    IsObjectSundry(what=$)
    {
+      % perhaps here so certain merchants will buy them?
       if IsClass(what,&Torch)
-         OR IsClass(what,&Flask)
-         OR IsClass(what,&Mug)
-         OR IsClass(what,&Food)
       {
          return TRUE;
       }
 
-      return FALSE;
+      return Send(what,@IsItemType,#type=ITEMTYPE_SUNDRY);
+   }
+
+   IsObjectPotion(what=$)
+   {
+      return Send(what,@IsItemType,#type=ITEMTYPE_POTION);
    }
 
    IsObjectMisc(what=$)
    {
-      if IsClass(what,&Chalice)
-         OR IsClass(what,&Scepter)
-         OR IsClass(what,&SpellItem)
-         OR IsClass(what,&Book)
+      % not sure why these were in misc but keeping them here for now
+      if IsClass(what,&SpellItem)
          OR IsClass(what,&Arsenic)
-         OR IsClass(what,&SpiderEgg)
-         OR IsClass(what,&SpiderEggShell)
-         OR IsClass(what,&Key) 
       {
          return TRUE;
       }
 
-      return FALSE;
+      return Send(what,@IsItemType,#type=ITEMTYPE_MISC);
    }
 
    IsObjectWearable(what=$)
    {
-      if IsClass(what,&Armor)
-         OR IsClass(what,&Helmet)
-         OR IsClass(what,&Gauntlet)
-         OR IsClass(what,&necklace)
-         OR IsClass(what,&Shield)
-         OR IsClass(what,&Pants)
-      {
-         return TRUE;
-      }
-
-      return FALSE;
+      return Send(what,@IsItemType,#type=ITEMTYPE_RING) |
+               Send(what,@IsItemType,#type=ITEMTYPE_NECKLACE) |
+               Send(what,@IsItemType,#type=ITEMTYPE_ARMOR);
    }
 
    IsObjectGem(what=$)
    {
       if IsClass(what,&JewelofFroz)
-         OR IsClass(what,&Emerald)
-         OR IsClass(what,&Ruby)
-         OR IsClass(what,&Sapphire)
-         OR IsClass(what,&Diamond)
-         OR IsClass(what,&Ring)
       {
          return TRUE;
       }
 
-      return FALSE;
+      return Send(what,@IsItemType,#type=ITEMTYPE_GEM);
    }
 
    IsObjectReagent(what=$)
@@ -5560,13 +5351,6 @@ messages:
       {
          % see formula above  
          iTime = 10000 / (viSpeed * 4);
-		 
-		 % diagonal move: scale-up the time according to the increased distance
-         if piState & ESTATE_LONG_STEP
-         {
-            % sqrt(2) = 1.41421356  
-            iTime = (14142 * iTime) / 10000;
-         }
 
          % finally we reduce the timer a bit (right now it's exact at ms)
          % why? the client should get a new position before the last destination
@@ -6233,10 +6017,10 @@ messages:
 
    CreateTreasure(who=$,corpse=$)
    {
-      local i,j,oReagent,iNumberItems,oTreasure,oTreasure_type,tokengen,
-            iSafetyCntr,lTreasureItems,iNumberOfItemsDropped,
-            iNumberOfItemsLooted,iRandomCashAmount,oMoney,iGetResult,
-            bCapacityFailure,bRangeFailure,iSurvivalLoot;
+      local i, j, oReagent, iNumberItems, oTreasure, oTreasure_type,
+            lTreasureItems, iNumberOfItemsDropped, iNumberOfItemsLooted,
+            iRandomCashAmount, oMoney, iGetResult, bCapacityFailure,
+            bRangeFailure, iSurvivalLoot;
 
       % Apparitions, etc, provide no treasure
       if pbIllusion
@@ -6245,7 +6029,7 @@ messages:
       }
 
       oTreasure_type = Send(SYS,@FindTreasureByNum,
-                            #num=Send(self,@GetTreasureType));
+                              #num=Send(self,@GetTreasureType));
       if oTreasure_type = $
       {
          Debug("Can't find monster treasure type",Send(self,@GetTreasureType),
@@ -6254,61 +6038,12 @@ messages:
          return;
       }
 
-      lTreasureItems = $;
-
-      if Send(self,@GetTreasureType) <> TID_NONE
-      {
-         if (viAttributes & MOB_ONE_TREASURE)
-         {
-            iNumberItems = 1;
-         }
-         else
-         {
-            % Random number of treasure items are dropped based on viLevel
-            %  and viDifficulty.  The higher these values are, the more items
-            %  that may be dropped.
-            iSurvivalLoot = piBoostedLevel
-              / Send(Send(SYS,@GetSurvivalRoomMaintenance),@GetSurvivalLoot);
-
-            iNumberItems = 1 + (viLevel/55) + Random(0,viDifficulty/3)
-                              + iSurvivalLoot;
-            iNumberItems = Bound(iNumberItems,$,6 + iSurvivalLoot);
-            iNumberItems = (Send(SETTINGS_OBJECT,@GetItemFactor)*iNumberItems)/100;
-            iNumberItems = Bound(iNumberItems,1,$);
-         }
-
-         tokengen = TRUE;
-         i = 1;
-
-         while i++ <= iNumberItems
-         {
-            oTreasure = Send(oTreasure_type,@GenerateTreasure,#level=viLevel,
-                              #who=who,#mob=self,#tokengen=tokengen,
-                              #corpse=corpse);
-            if oTreasure <> $
-            {
-               if IsClass(oTreasure,&SpellItem)
-               {
-                  iSafetyCntr = 0;
-
-                  while (NOT Send(oTreasure,@SpellItemIsAccessible))
-                        AND iSafetyCntr++ < 5
-                  {
-                     oTreasure = Send(oTreasure_type,@GenerateTreasure,
-                                      #level=viLevel,#who=who,#mob=self,
-                                      #tokengen=tokengen,#corpse=corpse);
-                  }
-               }
-
-               if IsClass(oTreasure,&Token)
-               {
-                  tokengen = FALSE;
-               }
-
-               lTreasureItems = Cons(oTreasure,lTreasureItems);
-            }
-         }
-      }
+      % TreasureType now handles putting together the treasure list.
+      % Returns a list of items to drop, or $.
+      lTreasureItems = Send(oTreasure_Type,@CreateMobTreasure,#mob=self,
+                              #who=who,#level=viLevel,#difficulty=viDifficulty,
+                              #corpse=corpse,#attributes=viAttributes,
+                              #boostedlevel=piBoostedLevel);
 
       % Add in our inventory
       foreach i in plActive
@@ -6376,7 +6111,7 @@ messages:
                AND Send(SYS,@UtilGetRoom,#what=oTreasure) = Send(who,@GetOwner)
                AND Send(oTreasure,@GetPos) <> $
                AND IsClass(who,&User)
-               AND Send(who,@CheckPlayerFlag,#flag=PFLAG_AUTOLOOT)
+               AND Send(who,@CheckPlayerPreference,#flag=CF_AUTOLOOT)
                AND (IsClass(oTreasure,&Money)
                        OR (NOT bRangeFailure
                            AND NOT bCapacityFailure))
@@ -6409,7 +6144,7 @@ messages:
       % Handle autoloot resources displayed to user.
       if iNumberOfItemsDropped <> 0
          AND IsClass(who,&User)
-         AND Send(who,@CheckPlayerFlag,#flag=PFLAG_AUTOLOOT)
+         AND Send(who,@CheckPlayerPreference,#flag=CF_AUTOLOOT)
       {
          if bRangeFailure
          {
@@ -6857,7 +6592,7 @@ messages:
       lActive = Send(poOwner,@GetHolderActive);
       foreach i in lActive
       {
-         oObject = Send(poOwner,@HolderExtractObject,#data=i);
+         oObject = First(i);
 
          % Pass if we're looking at ourself here.
          if oObject = self
@@ -6930,7 +6665,7 @@ messages:
       lActive = Send(poOwner,@GetHolderActive);
       foreach i in lActive
       {
-         oObject = Send(poOwner,@HolderExtractObject,#data=i);
+         oObject = First(i);
 
          % Pass if we're looking at ourself here.
          if oObject = self

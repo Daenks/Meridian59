@@ -192,6 +192,13 @@ properties:
    
    % Reputation hashtable for monster territory/influence system
    phReputation = $
+
+   % Keeps track of who damaged this battler recently, and for how much.
+   % Used to determine who logged / killed this monster or player.
+   % Form [damager, amount, timer]
+   plHurtMeRecently = $
+   % 20 seconds default for players, 60 for monsters
+   piHurtMeTime = 20000
    
 messages:
 
@@ -244,6 +251,21 @@ messages:
          }
          plApparitionList = $;
       }
+      
+      if plHurtMeRecently <> $
+      {
+         foreach i in plHurtMeRecently
+         {
+            if IsTimer(Nth(i,3))
+            {
+               DeleteTimer(Nth(i,3));
+            }
+            SetNth(i,1,$);
+            SetNth(i,2,$);
+            SetNth(i,3,$);
+            plHurtMeRecently = DelListElem(plHurtMeRecently,i);
+         }
+      }
 
       propagate;
    }
@@ -287,7 +309,7 @@ messages:
    {
       local oObjectAttribute, lCurResist, oEquipment, oEnchantment;
 
-      lCurResist = Send(SYS,@ListCopy,#source=Send(self,@GetBaseResistances));
+      lCurResist = ListCopy(Send(self,@GetBaseResistances));
 
       foreach oObjectAttribute in plObject_attributes
       {
@@ -408,7 +430,7 @@ messages:
 
    %%% Spell enchantment functions.
 
-   RemoveEnchantmentClass(class = &Object)
+   RemoveEnchantmentClass(class = &Object, report=TRUE)
    "If have a current enchantment set by anything in class, end it."
    {
       local i, state, removedSomething;
@@ -431,7 +453,8 @@ messages:
                state = Nth(i,3);
             }
 
-            Send(Nth(i,2),@RemoveEnchantmentEffects,#who=self,#state=state);
+            Send(Nth(i,2),@RemoveEnchantmentEffects,#who=self,#state=state,
+                  #report=report);
 
             Send(self,@ShowRemoveEnchantment,#what=Nth(i,2),
                   #type=ENCHANTMENT_PLAYER);
@@ -472,13 +495,7 @@ messages:
       }
       else
       {
-         foreach i in plEnchantments
-         {
-            if Nth(i,2) = what
-            {
-               return TRUE;
-            }
-         }
+         return GetListNode(plEnchantments, 2, what) <> $;
       }
 
       return FALSE;
@@ -551,24 +568,31 @@ messages:
    "cast at. Put in Battler instead of Player as we may use this for monster "
    "buffs one day."
    {
-      local i, iCastPower;
+      local lEnch;
 
-      foreach i in plEnchantments
+      if what = $
       {
-         if Nth(i,2) = what
+         Debug("GetCastPower called with $ spell!");
+
+         return 0;
+      }
+
+      lEnch = GetListNode(plEnchantments, 2, what);
+      if lEnch <> $
+      {
+         if Length(lEnch) > ENCHANTMENT_LIST_NO_STATE
          {
-            if Length(i) > ENCHANTMENT_LIST_NO_STATE
-            {
-               iCastPower = Nth(i,4);
-            }
-            else
-            {
-               iCastPower = Nth(i,3);
-            }
+            return Nth(lEnch,4);
+         }
+         else
+         {
+            return Nth(lEnch,3);
          }
       }
 
-      return iCastPower;
+      Debug("GetCastPower couldn't find enchantment ",what);
+
+      return 0;
    }
 
    %%% Mana related stuff common to players and mobs.
@@ -1508,24 +1532,22 @@ messages:
    {
       return;
    }
-   
+
    GetResistances()
    {
       return Send(self,@GetCurrentResistances);
    }
-   
+
    GetResistanceValueByType(type=$)
    {
-      local oResist;
-      
-      foreach oResist in Send(self,@GetCurrentResistances)
+      local lResist;
+
+      lResist = GetListNode(Send(self,@GetCurrentResistances), 1, type);
+      if lResist <> $
       {
-         if Nth(oResist,1) = type
-         {
-            return Nth(oResist,2);
-         }
+         return Nth(lResist,2);
       }
-      
+
       return 0;
    }
 
@@ -1555,6 +1577,23 @@ messages:
             plControlledMinions = DelListElem(plControlledMinions,what);
          }
       }
+
+      return;
+   }
+
+   RemoveAllMinions()
+   {
+      local i;
+
+      foreach i in plControlledMinions
+      {
+         if IsClass(i,&Monster)
+         {
+            Send(i,&Delete);
+         }
+      }
+
+      plControlledMinions = $;
 
       return;
    }
@@ -1753,6 +1792,68 @@ messages:
          AddTableEntry(phReputation,faction,value);
       }
       
+      return;
+   }
+   
+   GetHurtMeRecentlyAmount(who=$)
+   {
+      local i;
+      
+      foreach i in plHurtMeRecently
+      {
+         if Nth(i,1) = who
+         {
+            return Nth(i,2);
+         }
+      }
+
+      return 0;
+   }
+   
+   AddHurtMeRecently(who=$,amount=0)
+   {
+      local i;
+      
+      foreach i in plHurtMeRecently
+      {
+         if Nth(i,1) = who
+         {
+            if Nth(i,2) + amount > 100000
+            {
+               % Somebody is doing something stupid. Let's return this.
+               % Catch for players botting attacks on alts, shenanigans.
+               return;
+            }
+            SetNth(i,2,Nth(i,2)+amount);
+            DeleteTimer(Nth(i,3));
+            SetNth(i,3,CreateTimer(self,@RemoveHurtMeRecently,piHurtMeTime));
+            return;
+         }
+      }
+      
+      plHurtMeRecently = Cons([who,amount,CreateTimer(self,
+                               @RemoveHurtMeRecently,piHurtMeTime)],
+                               plHurtMeRecently);
+      
+      return;
+   }
+
+   RemoveHurtMeRecently(timer=$)
+   {
+      local i;
+      
+      foreach i in plHurtMeRecently
+      {
+         if Nth(i,3) = timer
+         {
+            SetNth(i,1,$);
+            SetNth(i,2,$);
+            SetNth(i,3,$);
+            plHurtMeRecently = DelListElem(plHurtMeRecently,i);
+            return;
+         }
+      }
+
       return;
    }
    

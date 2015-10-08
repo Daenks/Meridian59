@@ -570,6 +570,10 @@ char * name_function(int fnum)
 
    case SENDMESSAGE : return "Send";
    case POSTMESSAGE : return "Post";
+   case SENDLISTMSG : return "SendList";
+   case SENDLISTMSGBREAK : return "SendListBreak";
+   case SENDLISTMSGBYCLASS : return "SendListByClass";
+   case SENDLISTMSGBYCLASSBREAK : return "SendListByClassBreak";
 
    case SAVEGAME : return "SaveGame";
    case LOADGAME : return "LoadGame";
@@ -609,16 +613,19 @@ char * name_function(int fnum)
    case CREATEROOMDATA : return "LoadRoom";
    case FREEROOM : return "FreeRoom";
    case ROOMDATA : return "RoomData";
-   case CANMOVEINROOM : return "CanMoveInRoom";
-   case CANMOVEINROOMFINE : return "CanMoveInRoomFine";
-   case CANMOVEINROOMHIGHRES : return "CanMoveInRoomHighRes";
-   case GETHEIGHT : return "GetHeight";
-   case GETHEIGHTFLOORBSP : return "GetHeightFloorBSP";
-   case GETHEIGHTCEILINGBSP : return "GetHeightCeilingBSP";
    case LINEOFSIGHTBSP : return "LineOfSightBSP";
+   case GETLOCATIONINFOBSP: return "GetLocationInfoBSP";
+   case BLOCKERADDBSP: return "BlockerAddBSP";
+   case BLOCKERMOVEBSP: return "BlockerMoveBSP";
+   case BLOCKERREMOVEBSP: return "BlockerRemoveBSP";
+   case BLOCKERCLEARBSP: return "BlockerClearBSP";
+   case GETRANDOMPOINTBSP: return "GetRandomPointBSP";
+   case GETSTEPTOWARDSBSP: return "GetStepTowardsBSP";
 
    case MINIGAMENUMBERTOSTRING : return "MiniGameNumberToString";
    case MINIGAMESTRINGTONUMBER : return "MiniGameStringToNumber";
+
+   case CANMOVEINROOMBSP: return "CanMoveInRoomBSP";
 
    case APPENDLISTELEM : return "AppendListElem";
    case CONS  : return "Cons";
@@ -636,6 +643,10 @@ char * name_function(int fnum)
    case SWAPLISTELEM : return "SwapListElem";
    case INSERTLISTELEM : return "InsertListElem";
    case LAST : return "Last";
+   case GETLISTELEMBYCLASS : return "GetListElemByClass";
+   case GETLISTNODE : return "GetListNode";
+   case GETALLLISTNODESBYCLASS : return "C_GetAllListNodesByClass";
+   case LISTCOPY : return "ListCopy";
 
    case GETTIMEZONEOFFSET : return "GetTimeZoneOffset";
    case GETTIME : return "GetTime";

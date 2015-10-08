@@ -122,6 +122,8 @@ void AdminShowAccount(int session_id,admin_parm_type parms[],
                       int num_blak_parm,parm_node blak_parm[]);
 void AdminShowAccountHeader(void);
 void AdminShowOneAccount(account_node *a);
+void AdminDeleteUnusedAccounts(int session_id, admin_parm_type parms[],
+                               int num_blak_parm, parm_node blak_parm[]);
 void AdminShowResource(int session_id,admin_parm_type parms[],
                        int num_blak_parm,parm_node blak_parm[]);
 void AdminPrintResource(resource_node *r);
@@ -425,6 +427,7 @@ admin_table_type admin_create_table[] =
 admin_table_type admin_delete_table[] =
 {
 	{ AdminDeleteAccount, {I,N}, F, A|M,NULL, 0, "account","Delete account & user by ID" },
+	{ AdminDeleteUnusedAccounts, { N }, F, A | M, NULL, 0, "unused", "Delete unused accounts" },
 	{ AdminDeleteTimer,   {I,N}, F, A|M, NULL, 0, "timer",  "Delete timer by ID" },
 	{ AdminDeleteUser,    {I,N}, F, A|M, NULL, 0, "user",   "Delete user by object ID" },
 };
@@ -1185,7 +1188,7 @@ void AdminWhoEachSession(session_node *s)
 	aprintf("%-18.18s ",str);
 	
 	if (s->account != NULL)
-		aprintf("%4i",s->account->account_id);
+		aprintf("%4i ",s->account->account_id);
 	else
 		aprintf("    ");
 	
@@ -1194,7 +1197,7 @@ void AdminWhoEachSession(session_node *s)
 	else
 		aprintf(" %-3s","No");
 	
-	aprintf(" %4i ",s->session_id);
+	aprintf("%4i ",s->session_id);
 	aprintf("%-22.22s ",s->conn.name);
 	
 	aprintf("%s",GetStateName(s));
@@ -1375,6 +1378,8 @@ void AdminShowStatus(int session_id,admin_parm_type parms[],
 	aprintf("Used %i object nodes\n",GetObjectsUsed());
 	aprintf("Used %i string nodes\n",GetStringsUsed());
 	aprintf("Watching %i active timers\n",GetNumActiveTimers());
+	aprintf("Max number of messages in a class is %i\n", GetHighestMessageCount());
+	aprintf("Number of message hash collisions is %i\n", GetNumMessageHashCollisions());
 	
 	if (IsGameLocked())
 		aprintf("The game is LOCKED (%s)\n",GetGameLockedReason());
@@ -1446,34 +1451,42 @@ void AdminShowCalled(int session_id,admin_parm_type parms[],
 
 void AdminShowCalledClass(class_node *c)
 {
-   int i, num_calls;
+   int num_calls;
+   message_node *m;
 
-   for (i = 0; i<c->num_messages; i++)
+   if (!c->num_messages)
+      return;
+   for (int i = 0; i < MESSAGE_TABLE_SIZE; ++i)
    {
-      num_calls = c->messages[i].timed_call_count + c->messages[i].untimed_call_count;
-      if ((show_messages_ignore_count == -1 ||
-         (num_calls < show_messages_ignore_count ||
-         (num_calls == show_messages_ignore_count &&
-         c->messages[i].message_id > show_messages_ignore_id))))
+      m = c->messages[i];
+      while (m != NULL)
       {
-         if (num_calls > show_messages_total_count ||
-            (num_calls == show_messages_total_count &&
-            c->messages[i].message_id < show_messages_message_id))
+         num_calls = m->timed_call_count + m->untimed_call_count;
+         if ((show_messages_ignore_count == -1 ||
+            (num_calls < show_messages_ignore_count ||
+            (num_calls == show_messages_ignore_count &&
+            m->message_id > show_messages_ignore_id))))
          {
-            show_messages_timed_count = c->messages[i].timed_call_count;
-            show_messages_untimed_count = c->messages[i].untimed_call_count;
-            show_messages_total_count = num_calls;
-            if (show_messages_timed_count)
+            if (num_calls > show_messages_total_count ||
+               (num_calls == show_messages_total_count &&
+               m->message_id < show_messages_message_id))
             {
-               show_messages_time = c->messages[i].total_call_time / (double)show_messages_timed_count;
+               show_messages_timed_count = m->timed_call_count;
+               show_messages_untimed_count = m->untimed_call_count;
+               show_messages_total_count = num_calls;
+               if (show_messages_timed_count)
+               {
+                  show_messages_time = m->total_call_time / (double)show_messages_timed_count;
+               }
+               else
+               {
+                  show_messages_time = 0.0;
+               }
+               show_messages_message_id = m->message_id;
+               show_messages_class = c;
             }
-            else
-            {
-               show_messages_time = 0.0;
-            }
-            show_messages_message_id = c->messages[i].message_id;
-            show_messages_class = c;
          }
+         m = m->next;
       }
    }
 }
@@ -1841,7 +1854,7 @@ void AdminShowOneAccount(account_node *a)
 }
 
 void AdminShowResource(int session_id,admin_parm_type parms[],
-                       int num_blak_parm,parm_node blak_parm[])                       
+                       int num_blak_parm,parm_node blak_parm[])
 {
 	int rsc_id;
 	resource_node *r;
@@ -1879,6 +1892,9 @@ void AdminPrintResource(resource_node *r)
 	{
 		aprintf("%-7i %s = %s\n",r->resource_id,
 			r->resource_name == NULL ? "(dynamic)" : r->resource_name,r->resource_val[0]);
+		aprintf("WARNING: do not change player names with created resources.\n");
+		aprintf("Use send o 0 AdminChangeUserName oUser o obj_num sName q name instead.\n");
+		aprintf("Failure to do so will result in player's new name not being added to user table.\n");
 	}
 }
 
@@ -2083,6 +2099,10 @@ void AdminShowCalls(int session_id,admin_parm_type parms[],
 		case GETCLASS : strcpy(c_name, "GetClass"); break;
 		case SENDMESSAGE : strcpy(c_name, "Send"); break;
 		case POSTMESSAGE : strcpy(c_name, "Post"); break;
+		case SENDLISTMSG : strcpy(c_name, "SendList"); break;
+		case SENDLISTMSGBREAK : strcpy(c_name, "SendListBreak"); break;
+		case SENDLISTMSGBYCLASS : strcpy(c_name, "SendListByClass"); break;
+		case SENDLISTMSGBYCLASSBREAK : strcpy(c_name, "SendListByClassBreak"); break;
 		case GODLOG : strcpy(c_name, "GodLog"); break;
 		case DEBUG : strcpy(c_name, "Debug"); break;
 		case SAVEGAME : strcpy(c_name, "SaveGame"); break;
@@ -2114,13 +2134,15 @@ void AdminShowCalls(int session_id,admin_parm_type parms[],
 		case CREATEROOMDATA : strcpy(c_name, "CreateRoomData"); break;
 		case FREEROOM : strcpy(c_name, "FreeRoom"); break;
 		case ROOMDATA : strcpy(c_name, "RoomData"); break;
-		case CANMOVEINROOM : strcpy(c_name, "CanMoveInRoom"); break;
-		case CANMOVEINROOMFINE : strcpy(c_name, "CanMoveInRoomFine"); break;
-		case CANMOVEINROOMHIGHRES : strcpy(c_name, "CanMoveInRoomHighRes"); break;
-		case GETHEIGHT : strcpy(c_name, "GetHeight"); break;
-		case GETHEIGHTFLOORBSP: strcpy(c_name, "GetHeightFloorBSP"); break;
-		case GETHEIGHTCEILINGBSP: strcpy(c_name, "GetHeightCeilingBSP"); break;
+		case CANMOVEINROOMBSP: strcpy(c_name, "CanMoveInRoomBSP"); break;
 		case LINEOFSIGHTBSP: strcpy(c_name, "LineOfSightBSP"); break;
+		case GETLOCATIONINFOBSP: strcpy(c_name, "GetLocationInfoBSP"); break;
+		case GETRANDOMPOINTBSP: strcpy(c_name, "GetRandomPointBSP"); break;
+		case GETSTEPTOWARDSBSP: strcpy(c_name, "GetStepTowardsBSP"); break;
+		case BLOCKERADDBSP: strcpy(c_name, "BlockerAddBSP"); break;
+		case BLOCKERMOVEBSP: strcpy(c_name, "BlockerMoveBSP"); break;
+		case BLOCKERREMOVEBSP: strcpy(c_name, "BlockerRemoveBSP"); break;
+		case BLOCKERCLEARBSP: strcpy(c_name, "BlockerClearBSP"); break;
 		case MINIGAMENUMBERTOSTRING : strcpy(c_name, "MinigameNumberToString"); break;
 		case MINIGAMESTRINGTONUMBER : strcpy(c_name, "MinigameStringToNumber"); break;
 		case APPENDLISTELEM : strcpy(c_name, "AppendListElem"); break;
@@ -2139,6 +2161,10 @@ void AdminShowCalls(int session_id,admin_parm_type parms[],
 		case INSERTLISTELEM : strcpy(c_name, "InsertListElem"); break;
 		case DELLISTELEM : strcpy(c_name, "DelListElem"); break;
 		case FINDLISTELEM : strcpy(c_name, "FindListElem"); break;
+		case GETLISTELEMBYCLASS : strcpy(c_name, "GetListElemByClass"); break;
+		case GETLISTNODE : strcpy(c_name, "GetListNode"); break;
+		case GETALLLISTNODESBYCLASS : strcpy(c_name, "GetAllListNodesByClass"); break;
+		case LISTCOPY : strcpy(c_name, "ListCopy"); break;
 		case GETTIMEZONEOFFSET : strcpy(c_name, "GetTimeZoneOffset"); break;
 		case GETTIME : strcpy(c_name, "GetTime"); break;
 		case GETTICKCOUNT : strcpy(c_name, "GetTickCount"); break;
@@ -2253,6 +2279,7 @@ void AdminShowClass(int session_id,admin_parm_type parms[],
 {
 	int i;
 	class_node *c;
+	message_node *m;
 	char *classvar_name;
 	char buf[200];
 	
@@ -2285,11 +2312,20 @@ void AdminShowClass(int session_id,admin_parm_type parms[],
 				  GetDataName(c->vars[i].val));
 	}
 
-   for (i=0;i<c->num_messages;i++)
-      aprintf(": MSG %s\n",GetNameByID(c->messages[i].message_id));
+   if (c->num_messages)
+   {
+      for (i = 0; i < MESSAGE_TABLE_SIZE; i++)
+      {
+         m = c->messages[i];
+         while (m != NULL)
+         {
+            aprintf(": MSG %s\n", GetNameByID(m->message_id));
+            m = m->next;
+         }
+      }
+   }
 
-	aprintf(":>\n");
-	
+   aprintf(":>\n");
 }
 
 void AdminShowInstances(int session_id,admin_parm_type parms[],
@@ -4603,7 +4639,7 @@ void AdminReloadGame(int session_id,admin_parm_type parms[],
 	
 	aprintf("Unloading game... ");
 	AdminSendBufferList();
-	ResetRoomData();
+	ResetRooms();
 	ResetUser();
 	ResetString();
 	ResetTimer();
@@ -4635,6 +4671,33 @@ void AdminReloadGame(int session_id,admin_parm_type parms[],
 	SendTopLevelBlakodMessage(GetSystemObjectID(),LOADED_GAME_MSG,0,NULL);
 	
 	aprintf("done.\n");
+}
+
+// Uses the accounts_in_game global.
+void AdminDeleteUnusedAccounts(int session_id, admin_parm_type parms[],
+   int num_blak_parm, parm_node blak_parm[])
+{
+   // Make sure no one in game, because after deleting accounts
+   // we compact the numbers.
+   AdminHangupAll(session_id, parms, num_blak_parm, blak_parm);
+
+   accounts_in_game = 0;
+   ForEachSession(AdminReloadGameEachSession);
+   if (accounts_in_game > 0)
+   {
+      aprintf("Cannot delete unused accounts because %i %s in game.\n",
+         accounts_in_game, accounts_in_game == 1 ? "person is" : "people are");
+      return;
+   }
+
+   int beforeAcct = GetActiveAccountCount();
+
+   aprintf("Number of accounts before is: %i.\n", beforeAcct);
+   ForEachAccount(DeleteAccountIfUnused);
+   CompactAccounts();
+   int afterAcct = GetActiveAccountCount();
+   aprintf("Number of accounts after is: %i, deleted %i accounts.\n",
+      afterAcct, beforeAcct - afterAcct);
 }
 
 void AdminReloadGameEachSession(session_node *s)

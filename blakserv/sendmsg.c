@@ -84,7 +84,6 @@ void InitProfiling(void)
    kod_stat.interpreting_time_posts = 0;
    kod_stat.message_depth_highest = 0;
    kod_stat.interpreting_class = INVALID_CLASS;
-   kod_stat.debugging = ConfigBool(DEBUG_UNINITIALIZED);
 
    for (i = 0; i < MAX_C_FUNCTION; i++)
       kod_stat.c_count_untimed[i] = 0;
@@ -140,6 +139,10 @@ void InitBkodInterpret(void)
 	
 	ccall_table[SENDMESSAGE] = C_SendMessage;
 	ccall_table[POSTMESSAGE] = C_PostMessage;
+	ccall_table[SENDLISTMSG] = C_SendListMessage;
+	ccall_table[SENDLISTMSGBREAK] = C_SendListMessageBreak;
+	ccall_table[SENDLISTMSGBYCLASS] = C_SendListMessageByClass;
+	ccall_table[SENDLISTMSGBYCLASSBREAK] = C_SendListMessageByClassBreak;
 
 	ccall_table[SAVEGAME] = C_SaveGame;
 	ccall_table[LOADGAME] = C_LoadGame;
@@ -174,15 +177,17 @@ void InitBkodInterpret(void)
 	ccall_table[CREATEROOMDATA] = C_LoadRoom;
 	ccall_table[FREEROOM] = C_FreeRoom;
 	ccall_table[ROOMDATA] = C_RoomData;
-	ccall_table[CANMOVEINROOM] = C_CanMoveInRoom;
-	ccall_table[CANMOVEINROOMFINE] = C_CanMoveInRoomFine;
-	ccall_table[CANMOVEINROOMHIGHRES] = C_CanMoveInRoomHighRes;
-	ccall_table[GETHEIGHT] = C_GetHeight;
-	ccall_table[GETHEIGHTFLOORBSP] = C_GetHeightFloorBSP;
-	ccall_table[GETHEIGHTCEILINGBSP] = C_GetHeightCeilingBSP;
 	ccall_table[LINEOFSIGHTBSP] = C_LineOfSightBSP;
+	ccall_table[CANMOVEINROOMBSP] = C_CanMoveInRoomBSP;
 	ccall_table[CHANGETEXTUREBSP] = C_ChangeTextureBSP;
 	ccall_table[MOVESECTORBSP] = C_MoveSectorBSP;
+	ccall_table[GETLOCATIONINFOBSP] = C_GetLocationInfoBSP;
+	ccall_table[BLOCKERADDBSP] = C_BlockerAddBSP;
+	ccall_table[BLOCKERMOVEBSP] = C_BlockerMoveBSP;
+	ccall_table[BLOCKERREMOVEBSP] = C_BlockerRemoveBSP;
+	ccall_table[BLOCKERCLEARBSP] = C_BlockerClearBSP;
+	ccall_table[GETRANDOMPOINTBSP] = C_GetRandomPointBSP;
+	ccall_table[GETSTEPTOWARDSBSP] = C_GetStepTowardsBSP;
 
 	ccall_table[APPENDLISTELEM] = C_AppendListElem;
 	ccall_table[CONS] = C_Cons;
@@ -200,6 +205,10 @@ void InitBkodInterpret(void)
 	ccall_table[DELLISTELEM] = C_DelListElem;
 	ccall_table[FINDLISTELEM] = C_FindListElem;
 	ccall_table[ISLISTMATCH] = C_IsListMatch;
+	ccall_table[GETLISTELEMBYCLASS] = C_GetListElemByClass;
+	ccall_table[GETLISTNODE] = C_GetListNode;
+	ccall_table[GETALLLISTNODESBYCLASS] = C_GetAllListNodesByClass;
+	ccall_table[LISTCOPY] = C_ListCopy;
 
 	ccall_table[GETTIMEZONEOFFSET] = C_GetTimeZoneOffset;
 	ccall_table[GETTIME] = C_GetTime;
@@ -306,8 +315,6 @@ int SendTopLevelBlakodMessage(int object_id,int message_id,int num_parms,parm_no
 		eprintf("SendTopLevelBlakodMessage called with message_depth %i "
 			"and message id %i\n", message_depth,message_id);
 	}
-	
-	kod_stat.debugging = ConfigBool(DEBUG_UNINITIALIZED);
 	
 	start_time = GetMicroCountDouble();
 	kod_stat.num_top_level_messages++;
@@ -597,8 +604,9 @@ int InterpretAtMessage(int object_id,class_node* c,message_node* m,
 
 	num_locals = get_byte();
 	num_parms = get_byte();
-	
+
 	local_vars.num_locals = num_locals + num_parms;
+
 	if (local_vars.num_locals > MAX_LOCALS)
 	{
 		dprintf("InterpretAtMessage found too many locals and parms for OBJECT %i CLASS %s MESSAGE %s (%s) aborting and returning NIL\n",
@@ -609,22 +617,13 @@ int InterpretAtMessage(int object_id,class_node* c,message_node* m,
 		(*ret_val).int_val = NIL;
 		return RETURN_NO_PROPAGATE;
 	}
-	
-	/*if (ConfigBool(DEBUG_INITLOCALS))
-	{
-		parm_init_value.v.tag = TAG_INVALID;
-		parm_init_value.v.data = 1;
-		
-		for (i = 0; i < local_vars.num_locals; i++)
-		{
-			local_vars.locals[i] = parm_init_value;
-		}
-	}*/
-	
+
 	/* both table and call parms are sorted */
 	
 	j = 0;
-	for (i=0;i<num_parms;i++)
+	i = 0;
+
+	for (;i<num_parms;i++)
 	{
 		parm_id = get_int(); /* match this with parameters */
 		parm_init_value.int_val = get_int();
@@ -649,7 +648,11 @@ int InterpretAtMessage(int object_id,class_node* c,message_node* m,
 		if (!found_parm)
 			local_vars.locals[i].int_val = parm_init_value.int_val;
 	}
-	
+
+	// Init all non-parm locals to NIL
+	for (;i < local_vars.num_locals; ++i)
+		local_vars.locals[i].int_val = NIL;
+
 	for(;;)			/* returns when gets a blakod return */
 	{
 		num_interpreted++;
@@ -747,13 +750,6 @@ __inline void StoreValue(int object_id,local_var_type *local_vars,int data_type,
 {
 	class_node *class_data;
 	object_node *o;
-	
-	if (kod_stat.debugging)
-	{
-		if (new_data.v.tag == TAG_INVALID)
-			eprintf("[%s] StoreValue trying to assign with uninitialized data (INVALID %i)\n",
-			BlakodDebugInfo(),new_data.v.data);
-	}
 	
 	switch (data_type)
 	{

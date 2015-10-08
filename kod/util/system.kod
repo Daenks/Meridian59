@@ -71,6 +71,7 @@ resources:
    system_admin_message = "%q"
    system_blank_resource = ""
    system_space_resource = " "
+   system_unknown_resource = "Unknown"
 
    % Templates for sending lots of description parts.
    system_rsc_template_1 = "%r"
@@ -260,7 +261,7 @@ resources:
 
    system_success_rsc = "Success."
    system_failure_rsc = "Failure."
-   system_please_wait_rsc = "Please wait about 30 seconds for processing."
+   system_please_wait_rsc = "Please wait about 5 seconds for processing."
 
    % A resource for use when a hidden admin tells something to a non-admin.
    %  Placed here so we can filter out user names to avoid confusion.
@@ -331,7 +332,6 @@ properties:
    plRooms = $
    plUsers = $
    plUsers_logged_on = $
-   plTreasure_types = $
    plSpells = $
    plSkills = $
    plItem_Attributes = $
@@ -353,6 +353,9 @@ properties:
    % A list of naughty words.
    plNaughtyWords = $
 
+   % A list of names that are retired and can only be set by an admin
+   plRetiredNames = $
+
    poHolder1 = $ % Temporary holders used in offers
    poHolder2 = $
 
@@ -363,10 +366,9 @@ properties:
    % outdoor brightness level (0-100), updated hourly
    piBrightness
    % updated here and there
-   piWeather
-
-   % updated every day
-   pbStormy = TRUE
+   piDay_Phase
+   % weather around the world
+   plWeatherConditions = $
 
    poLibrary = $
    poParliament = $
@@ -395,6 +397,8 @@ properties:
    phSkills
    % Hash table for item attributes.
    phItemAtts
+   % Hash table for treasure types.
+   phTresTypes
 
    poMoney = $
 
@@ -510,6 +514,8 @@ messages:
       % Reset the list of naughty words
       Send(self,@ResetNaughtyWords);
 
+      Send(self,@ResetRetiredNames);
+
       Send(self,@RecreateNecromancerBalance);
       Send(self,@CreateUserTable);
       Send(self,@CreateRoomTable);
@@ -567,6 +573,8 @@ messages:
 
       Send(self,@RecreateStatistics);  % Must create after anything you want to measure
 
+      ptRecreateTimer = CreateTimer(self,@CreateLightAndWeather,3000);
+
       return;
    }
 
@@ -585,7 +593,7 @@ messages:
 
    RecreateAll()
    {
-      local i, plSavedFlagStates, plSavedSenate;
+      local i, lSavedFlagStates, lSavedSenate;
 
       % Reset our level points.
       vlLevelPoints = [1,2,4,6,8,10];
@@ -612,12 +620,14 @@ messages:
       piRecreate_State = RECREATE_PHASE_ONE;
       Debug("Starting: Recreate phase ONE");
 
-      plSavedFlagStates = Send(self,@ListCopy,#source=Send(Send(self,@GetTerritoryGame),@SaveFlagStates));
-      plSavedSenate = Send(self,@ListCopy,#source=Send(Send(self,@GetTokenGame),@GetSenate));
+      lSavedFlagStates = ListCopy(Send(poTerritoryGame,@SaveFlagStates));
+      lSavedSenate = ListCopy(Send(poTokenGame,@GetSenate));
 
       % Don't leave any active spellcasting objects
       Send(self,@DeleteAllSpellTotems);
- 
+
+      Send(self,@CreateUserTable);
+
       Send(self,@RecreateNecromancerBalance);
       Send(self,@ClearAllQuests);
       Send(self,@CreateAllBanksIfNew);
@@ -646,20 +656,20 @@ messages:
       %Send(self,@CreateAllSpellsIfNew);
       %Send(self,@CreateAllRoomsIfNew);
 
-      if plSavedFlagStates <> $
+      if lSavedFlagStates <> $
       {
-         Send(Send(self,@GetTerritoryGame),@SetFlagStates,#lFlagStates=plSavedFlagStates);
-         plSavedFlagStates = $;
+         Send(poTerritoryGame,@SetFlagStates,#lFlagStates=lSavedFlagStates);
+         lSavedFlagStates = $;
       }
-      
-      if plSavedSenate <> $
+
+      if lSavedSenate <> $
       {
-         Send(Send(self,@GetTokenGame),@SetSenate,#lSenate=plSavedSenate);
-         plSavedSenate = $;
+         Send(poTokenGame,@SetSenate,#lSenate=lSavedSenate);
+         lSavedSenate = $;
       }
-      
+
       piRecreate_state = RECREATE_WAITING;
-      ptRecreateTimer = CreateTimer(self,@RecreateTimerPhaseTwo,3000);
+      ptRecreateTimer = CreateTimer(self,@RecreateTimerPhaseTwo,500);
 
       Send(self,@RecreateVisibleCargoTypes);
 
@@ -685,7 +695,7 @@ messages:
       Send(self,@RecreateAllTreasureTypes);
       Send(self,@RecreateAllBackgroundObjects);
 
-      ptRecreateTimer = CreateTimer(self,@RecreateTimerPhaseThree,2000);
+      ptRecreateTimer = CreateTimer(self,@RecreateTimerPhaseThree,500);
       piRecreate_state = RECREATE_WAITING;
 
       return;
@@ -710,7 +720,7 @@ messages:
 
       Send(self,@RecreateAllSpells,#figure_totals=FALSE);
 
-      ptRecreateTimer = CreateTimer(self,@RecreateTimerPhaseFour,2000);
+      ptRecreateTimer = CreateTimer(self,@RecreateTimerPhaseFour,500);
       piRecreate_state = RECREATE_WAITING;
 
       return;
@@ -731,7 +741,7 @@ messages:
 
       Send(self,@RecreateAllSkills,#figure_totals=FALSE);
 
-      ptRecreateTimer = CreateTimer(self,@RecreateTimerPhaseFive,2000);
+      ptRecreateTimer = CreateTimer(self,@RecreateTimerPhaseFive,500);
       piRecreate_state = RECREATE_WAITING;
 
       return;
@@ -790,6 +800,8 @@ messages:
       Send(self,@RecalcLightAndWeather);
       Send(self,@ReturnShrineAllegiance);
       Send(self,@RecreateStatistics);  % Must create after anything you want to measure
+
+      Send(self,@ResetRetiredNames);
 
       piRecreate_state = RECREATE_NOT;
       Debug("Successful recreate!");
@@ -982,21 +994,9 @@ messages:
 
    GarbageCollecting(type = $)
    {
-      local i;
-
       Send(self,@CleanReflectionList);
 
-      foreach i in plUsers_logged_on
-      {
-         Send(i,@GarbageCollecting);
-      }
-
-      % Don't clear these on GC any more.
-      %phUsers = $;
-      %phRooms = $;
-      %phSpells = $;
-      %phSkills = $;
-      %phItemAtts = $;
+      SendList(plUsers_logged_on,0,@GarbageCollecting);
 
       Send(poStatistics,@GarbageCollecting);
 
@@ -1005,55 +1005,32 @@ messages:
 
    GarbageCollectingDone(type = $)
    {
-      local i;
-
       if type = SYSEVENT_RELOAD_SYSTEM
       {
-         foreach i in plRooms
-         {
-            Send(i,@LoadRoomData);
-         }
+         SendList(plRooms,0,@LoadRoomData);
       }
 
-      % Tables are GC'd now, don't need to recreate them.
-      %Send(self,@CreateUserTable);
-      %Send(self,@CreateRoomTable);
-      %Send(self,@CreateSpellTable);
-      %Send(self,@CreateSkillTable);
-      %Send(self,@CreateItemAttTable);
-
-      foreach i in plUsers_logged_on
-      {
-         Send(i,@GarbageCollectingDone);
-      }
+      SendList(plUsers_logged_on,0,@GarbageCollectingDone);
 
       return;
    }
 
    LoadedFromDisk()
    {
-      local i;
+      % Room maintenance.
+      SendList(plRooms,0,@LoadRoomData);
+
+      Send(&BossRoom,@ResetBoss);
+
+      % Check tables.
+      Send(self,@VerifyAllTables);
 
       % Player maintenance.
-
-      foreach i in plUsers_logged_on
-      {
-         Send(i,@DisconnectSession);
-      }
-
+      SendList(plUsers_logged_on,0,@DisconnectSession);
       plUsers_logged_on = $;
 
       Send(&Player,@SetKillTarget,#target=$);
       Send(&LogoffGhost,@Delete);
-
-      % Room maintenance.
-
-      foreach i in plRooms
-      {
-         Send(i,@LoadRoomData);
-      }
-
-      Send(&BossRoom,@ResetBoss);
 
       % System object maintenance.
 
@@ -1065,13 +1042,35 @@ messages:
 
       Send(self,@RecalcLightAndWeather);
 
-      % Recreate the hash tables.
+      return;
+   }
 
-      Send(self,@CreateUserTable);
-      Send(self,@CreateRoomTable);
-      Send(self,@CreateSpellTable);
-      Send(self,@CreateSkillTable);
-      Send(self,@CreateItemAttTable);
+   VerifyAllTables()
+   {
+      if phUsers = $ OR NOT IsTable(phUsers)
+      {
+         Send(self,@CreateUserTable);
+      }
+      if phRooms = $ OR NOT IsTable(phRooms)
+      {
+         Send(self,@CreateRoomTable);
+      }
+      if phSpells = $ OR NOT IsTable(phSpells)
+      {
+         Send(self,@CreateSpellTable);
+      }
+      if phSkills = $ OR NOT IsTable(phSkills)
+      {
+         Send(self,@CreateSkillTable);
+      }
+      if phItemAtts = $ OR NOT IsTable(phItemAtts)
+      {
+         Send(self,@CreateItemAttTable);
+      }
+      if phTresTypes = $ OR NOT IsTable(phTresTypes)
+      {
+         Send(self,@RecreateAllTreasureTypes);
+      }
 
       return;
    }
@@ -1378,7 +1377,6 @@ messages:
 
    NewDay()
    {
-      local i;
       piDay = (piDay + 1) mod 240;
 
       if piDay = 0
@@ -1386,24 +1384,18 @@ messages:
          Send(self,@NewYear);
       }
 
-      pbDecay_counter = pbDecay_counter + 1;
-      piLogoffPenaltyDecayCounter = piLogoffPenaltyDecayCounter + 1;
-      if pbDecay_counter >=3
+      ++pbDecay_counter;
+      ++piLogoffPenaltyDecayCounter;
+      if pbDecay_counter >= 3
       {
          pbDecay_counter = 0;
-         foreach i in plUsers
-         {
-            Send(i,@decayPKillCount);
-         }
+         SendList(plUsers,0,@DecayPKillCount);
       }
 
       if piLogoffPenaltyDecayCounter >= piLogoffPenaltyDecayTime
       {
          piLogoffPenaltyDecayCounter = 0;
-         foreach i in plUsers
-         {
-            Send(i,@DecayLogoffPenaltyCount);
-         }
+         SendList(plUsers,0,@DecayLogoffPenaltyCount);
       }
 
       Send(self,@RecalcWeatherConditions);
@@ -1480,24 +1472,28 @@ messages:
       return;
    }
 
-   SystemNewTreasureType(what = $)
-   "Called by a treasure type to register itself on our list."
+   SystemNewTreasureType(what = $, iNum = 0)
+   "Called by a treasure type to register itself in our table."
    {
-      local i,tid;
+      local i, tid;
 
-      tid = Send(what,@GetTreasureTypeNum);
-
-      foreach i in plTreasure_types
+      if what = $
+         OR iNum < TID_NONE
       {
-         if Send(i,@GetTreasureTypeNum) = tid
-         {
-            % Should Send i delete here, but treasure types don't reference
-            % anything so should be ok for now.
-            plTreasure_types = DelListElem(plTreasure_types,i);
-         }
+         return;
       }
 
-      plTreasure_types = Cons(what,plTreasure_types);
+      if phTresTypes = $
+      {
+         phTresTypes = CreateTable(191);
+      }
+
+      if GetTableEntry(phTresTypes,iNum) = what
+      {
+         DeleteTableEntry(phTresTypes,iNum);
+      }
+
+      AddTableEntry(phTresTypes,iNum,what);
 
       return;
    }
@@ -1634,17 +1630,7 @@ messages:
 
    FindTreasureByNum(num = 0)
    {
-      local i;
-
-      foreach i in plTreasure_types
-      {
-         if Send(i,@GetTreasureTypeNum) = num
-         {
-            return i;
-         }
-      }
-
-      return $;
+      return GetTableEntry(phTresTypes, num);
    }
 
    GetSystemHolder1()
@@ -1724,11 +1710,11 @@ messages:
       return $;
    }
 
-   UserKilled(what = $,killer = $)
+   UserKilled(what = $,killer = $, oRoom = $,stroke_obj = $)
    {
       local i, rMessage, bMurder, oSoldierShield, oToken, oGuild, oKillerGuild,
             param2, param3, param4, param5, param6, param7, type5, type7,
-            war_string1, war_string2, oBook, oMaster;
+            war_string1, war_string2, oBook, oMaster, oKillingBlow;
 
       % Notify the event engine
       Send(EVENTENGINE_OBJECT,@UserKilled,#who=what,#killer=killer);
@@ -1738,6 +1724,17 @@ messages:
          OR IsClass(killer,&Guest)
       {
          return;
+      }
+
+      oKillingBlow = $;
+
+      if stroke_obj <> $ AND Send(stroke_obj,@GetName) <> $
+      {
+         oKillingBlow = Send(stroke_obj,@GetName);
+      }
+      else
+      {
+          oKillingBlow = system_unknown_resource;
       }
 
       if isClass(what,&User) AND isClass(killer,&User)
@@ -1755,7 +1752,14 @@ messages:
          {
             Send(poNecromancerBalance,@IncrementHKCounter);
          }
+
+         %pvp flag set to TRUE
+         RecordStat(STAT_PLAYERDEATH, Send(what,@GetTrueName), Send(killer,@GetTrueName), Send(oRoom,@GetName), oKillingBlow, TRUE);	 
       }
+      else
+	   {
+		   RecordStat(STAT_PLAYERDEATH,Send(what,@GetTrueName), Send(killer,@GetName), Send(oRoom,@GetName), oKillingBlow, FALSE);
+	   }
 
       Send(Send(self,@FindRoomByNum,#num=RID_TOS_GRAVEYARD),@PlayerKilled,
            #who=what,#killer=killer);
@@ -2368,6 +2372,7 @@ messages:
       Send(self,@CreateOneRoomIfNew,#num=RID_JAS_SEWER1,#class=&JasSewer1);
       Send(self,@CreateOneRoomIfNew,#num=RID_JAS_SEWER2,#class=&JasSewer2);
       Send(self,@CreateOneRoomIfNew,#num=RID_JAS_SEWER3,#class=&JasSewer3);
+      Send(self,@CreateOneRoomIfNew,#num=RID_JAS_VAULT,#class=&JasperVault);
 
       % Barloque
       Send(self,@CreateOneRoomIfNew,#num=RID_BAR_NORTH,#class=&BarloqueNorth);
@@ -3175,6 +3180,7 @@ messages:
       Send(self,@CreateOneSpellIfNew,#num=SID_NIGHT_VISION,#class=&NightVision);
       Send(self,@CreateOneSpellIfNew,#num=SID_FIREBALL,#class=&Fireball);
       Send(self,@CreateOneSpellIfNew,#num=SID_DMRESCUE,#class=&DMRescue);
+      Send(self,@CreateOneSpellIfNew,#num=SID_SPECTATE,#class=&Spectate);
       Send(self,@CreateOneSpellIfNew,#num=SID_RESCUE,#class=&Rescue);
       Send(self,@CreateOneSpellIfNew,#num=SID_SMITE,#class=&Smite);
       Send(self,@CreateOneSpellIfNew,#num=SID_DAMN,#class=&Damn);
@@ -3671,6 +3677,7 @@ messages:
    RecreateAllBrains()
    {
       plBrains = $;
+      plBrains = Cons(Create(&SwarmBrain),plBrains);
       plBrains = Cons(Create(&Brain),plBrains);
 
       return;
@@ -3805,6 +3812,9 @@ messages:
    "If the type already exists, it is deleted and a new one "
    "made.  This makes changing treasure types easy--just call us."
    {
+      % Recreate the table.
+      phTresTypes = CreateTable(191);
+
       Create(&NoTreasure);
       Create(&NewbieAreaTreasure);
 
@@ -3864,6 +3874,16 @@ messages:
       Create(&EasterBunnyTreasure);
       Create(&KillerBunnyTreasure);
 
+      Create(&XeoAirTreasure);
+      Create(&XeoEarthTreasure);
+      Create(&XeoFireTreasure);
+      Create(&XeoWaterTreasure);
+      Create(&XeoAcidTreasure);
+      Create(&XeoUnholyTreasure);
+      Create(&XeoHolyTreasure);
+      Create(&XeoNeruTreasure);
+      Create(&XeoIllTreasure);
+
       return;
    }
 
@@ -3891,21 +3911,27 @@ messages:
 
    GetSun()
    {
-      local i;
-
-      foreach i in plBackground_objects
-      {
-         if IsClass(i,&Sun)
-         {
-            return i;
-         }
-      }
-      return $;
+      return GetListElemByClass(plBackground_objects,&Sun);
    }
 
-   GetWeather()
+   GetDayPhase()
    {
-      return piWeather;
+      return piDay_Phase;
+   }
+
+   GetSeason()
+   {
+      return piYear MOD 4;
+   }
+
+   CreateLightAndWeather()
+   "Called by timer when System is first created, to add a delay."
+   {
+      ptRecreateTimer = $;
+      Send(self,@RecalcWeatherConditions);
+      Send(self,@RecalcLightAndWeather);
+
+      return;
    }
 
    RecalcLightAndWeather()
@@ -3932,13 +3958,64 @@ messages:
    }
 
    RecalcWeatherConditions()
-   "Resets piStormy randomly"
    {
-      pbStormy = False;
-      if Random(1,100) <= 100
+      local i,j,iRand, iZone,lLastWeatherConditions;
+
+      % don't fiddle with weather during Qormas event
+      if (Send(EVENTENGINE_OBJECT,@IsQormasActive))
       {
-         pbStormy = True;
+         return;
       }
+
+      if (plWeatherConditions = $)
+      {
+         for(i=1;i<=WEATHER_ZONE_MAX;++i)
+         {
+            plWeatherConditions = Cons(WEATHER_PATTERN_CLEAR,
+                                    plWeatherConditions);
+         }
+      }
+
+      lLastWeatherConditions = ListCopy(plWeatherConditions);
+
+      for(i=1;i<=WEATHER_ZONE_MAX;++i)
+      {
+         iRand = Random(1,100);
+         if  (iRand <= Send(SETTINGS_OBJECT,@GetStormChance))
+         {
+            if(Nth(plWeatherConditions,i) <> WEATHER_PATTERN_STORM)
+            {
+               SetNth(plWeatherConditions,i,WEATHER_PATTERN_STORM);
+            }
+         }
+         else if (Nth(plWeatherConditions,i) <> WEATHER_PATTERN_CLEAR)
+         {
+            SetNth(plWeatherConditions,i,WEATHER_PATTERN_CLEAR);
+         }
+      }
+
+      foreach i in plRooms
+      {
+         iZone = Send(i,@GetWeatherZone);
+
+         % this is expensive, only continue if the weather has changed
+         if (iZone <> 0)
+         {
+            if (Nth(plWeatherConditions,iZone) 
+               <> Nth(lLastWeatherConditions,iZone))
+            {
+               if (Nth(plWeatherConditions,iZone) <> WEATHER_PATTERN_CLEAR)
+               {
+                  Send(i,@StartStorm);
+               }
+               else if (Nth(plWeatherConditions,iZone) <> WEATHER_PATTERN_STORM)
+               {
+                  Send(i,@EndStorm);
+               }
+            }
+         }
+      }
+
       return;
    }
 
@@ -3949,38 +4026,19 @@ messages:
 
       if piHour < 6 or piHour > 20
       {
-         piWeather = WEATHER_NIGHT;
+         piDay_Phase = DAY_PHASE_NIGHT;
+      }
+      else if piHour > 17
+      {
+         piDay_Phase = DAY_PHASE_DUSK;
+      }
+      else if piHour < 9
+      {
+         piDay_Phase = DAY_PHASE_DAWN;
       }
       else
       {
-         if piHour > 17
-         {
-            piWeather = WEATHER_DUSK;
-            if pbStormy
-            {
-               piWeather = WEATHER_DUSK_STORMY;
-            }
-
-         }
-         else
-         {
-            if piHour < 9
-            {
-               piWeather = WEATHER_DAWN;
-               if pbStormy
-               {
-                  piWeather = WEATHER_DAWN_STORMY;
-               }
-            }
-            else
-            {
-               piWeather = WEATHER_DAY;
-               if pbStormy
-               {
-                  piWeather = WEATHER_DAY_STORMY;
-               }
-            }
-         }
+         piDay_Phase = DAY_PHASE_DAY;
       }
 
       % shift hour so doesn't get light /dark until later
@@ -4047,7 +4105,7 @@ messages:
       piHour = (piHour + 1) mod 24;
       if piHour <> 0
       {
-         CreateTimer(self,@TestGameDayTimer,3000);
+         CreateTimer(self,@TestGameDayTimer,500);
       }
       else
       {
@@ -4175,6 +4233,19 @@ messages:
       return;
    }
 
+   AdminChangeUserName(oUser=$,sName=$)
+   "Can be called by admin to both validate and change a user name."
+   {
+      if (Send(self,@ValidateUserName,#oUser=oUser,#sName=sName))
+      {
+         Send(self,@ChangeUserName,#oUser=oUser,#sName=sName);
+
+         return system_success_rsc;
+      }
+
+      return system_failure_rsc;
+   }
+
    ValidateUserName(oUser=$,sName=$)
    {
       local i, lBadNameContain, lBadNameIs, oLookup;
@@ -4278,6 +4349,15 @@ messages:
       }
 
       % Name should be valid.
+
+      % pay homage to those who came before us
+      foreach i in plRetiredNames
+      {
+         if StringEqual(sName, i)
+         {
+            return FALSE;
+         }
+      }
 
       return TRUE;
    }
@@ -4699,6 +4779,26 @@ messages:
       return piYear;
    }
 
+   SetYear(year=0)
+   {
+      local i, oldYear, adjust;
+
+      oldYear = piYear;
+      piYear = year;
+      adjust = piYear - oldYear;
+
+      foreach i in plUsers
+      {
+         if (Send(i,@GetLastLoginTime) <> 0)
+         {
+            Send(i,@SetBirthYear,#year=Send(i,@GetBirthYear) + adjust);
+         }
+      }
+      
+      return;
+      
+   }
+
    ClearAllQuests()
    {
       if poQuestEngine <> $
@@ -5052,13 +5152,6 @@ messages:
       return send(EVENTENGINE_OBJECT,@IsChaosNightActive);
    }
 
-   % HACK in case EVENTENGINE_OBJECT hasn't been created yet,
-   % don't call this, ever.  It is'nt useful for anything else.
-   IsChaosNightActive()
-   {
-      return false;
-   }
-
    ScheduleChaosNight(iMonth=$,iDay=$,iYear=$,
                       iHour=21,iMinute=0,
                       duration=60,
@@ -5239,6 +5332,11 @@ messages:
       plMonsterTemplates = cons(create(&XeoWater),plMonsterTemplates);
       plMonsterTemplates = cons(create(&XeoEarth),plMonsterTemplates);
       plMonsterTemplates = cons(create(&XeoAir),plMonsterTemplates);
+      plMonsterTemplates = cons(create(&XeoAcid),plMonsterTemplates);
+      plMonsterTemplates = cons(create(&XeoUnholy),plMonsterTemplates);
+      plMonsterTemplates = cons(create(&XeoHoly),plMonsterTemplates);
+      plMonsterTemplates = cons(create(&XeoNeru),plMonsterTemplates);
+      plMonsterTemplates = cons(create(&XeoIll),plMonsterTemplates);
 
       plMonsterTemplates = cons(create(&DarkAngel),plMonsterTemplates);
       plMonsterTemplates = cons(create(&MolluskMonster),plMonsterTemplates);
@@ -5323,6 +5421,7 @@ messages:
       plItemTemplates = cons(create(&Rose),plItemTemplates);
       plItemTemplates = cons(create(&Book),plItemTemplates);
       plItemTemplates = cons(create(&LoreTosApoth),plItemTemplates);
+      plItemTemplates = cons(create(&LoreHist1),plItemTemplates);
       
       plItemTemplates = cons(create(&JalaNecklace),plItemTemplates);
       plItemTemplates = cons(create(&NecromancerAmulet),plItemTemplates);
@@ -5495,6 +5594,11 @@ messages:
       plItemTemplates = cons(create(&SkyHeartStone),plItemTemplates);
       plItemTemplates = cons(create(&BlueHeartStone),plItemTemplates);
       plItemTemplates = cons(create(&BrownHeartStone),plItemTemplates);
+      plItemTemplates = cons(create(&GreenHeartStone),plItemTemplates);
+      plItemTemplates = cons(create(&BlackHeartStone),plItemTemplates);
+      plItemTemplates = cons(create(&WhiteHeartStone),plItemTemplates);
+      plItemTemplates = cons(create(&DarkGreenHeartStone),plItemTemplates);
+      plItemTemplates = cons(create(&PurpleHeartStone),plItemTemplates);
 
       plItemTemplates = cons(create(&ShamanBlood),plItemTemplates);
       plItemTemplates = cons(create(&YrxlSap),plItemTemplates);
@@ -5549,6 +5653,9 @@ messages:
       plItemTemplates = cons(create(&Bread),plItemTemplates);
       plItemTemplates = cons(create(&Grapes),plItemTemplates);
       plItemTemplates = cons(create(&Apple),plItemTemplates);
+      plItemTemplates = cons(create(&Cookie),plItemTemplates);
+      plItemTemplates = cons(create(&Pear),plItemTemplates);
+      plItemTemplates = cons(create(&Orange),plItemTemplates);
 
       plItemTemplates = cons(create(&EasterEgg),plItemTemplates);
 
@@ -6305,6 +6412,62 @@ messages:
       return;
    }
 
+   ResetRetiredNames()
+   {
+      plRetiredNames = [ "Zaphod", "Zandramas" ]; 
+
+      plRetiredNames = cons("Zjiria",plRetiredNames);
+      plRetiredNames = cons("Q",plRetiredNames);
+      plRetiredNames = cons("Lady Jane",plRetiredNames);
+      plRetiredNames = cons("Regifan Du Bukise",plRetiredNames);
+      plRetiredNames = cons("Rhinosharkus",plRetiredNames);
+      plRetiredNames = cons("Tonto",plRetiredNames);
+      plRetiredNames = cons("Zangus Dixon",plRetiredNames);
+      plRetiredNames = cons("Mosiah",plRetiredNames);
+      plRetiredNames = cons("Mocker",plRetiredNames);
+      plRetiredNames = cons("Satin",plRetiredNames);
+      plRetiredNames = cons("Greenwich",plRetiredNames);
+      plRetiredNames = cons("Xian",plRetiredNames);
+      plRetiredNames = cons("Gort",plRetiredNames);
+      plRetiredNames = cons("Aphasia",plRetiredNames);
+      plRetiredNames = cons("Tendar",plRetiredNames);
+      plRetiredNames = cons("Vertigo",plRetiredNames);
+      plRetiredNames = cons("Omar",plRetiredNames);
+      plRetiredNames = cons("Bromm",plRetiredNames);
+      plRetiredNames = cons("Cat",plRetiredNames);
+      plRetiredNames = cons("Henry V",plRetiredNames);
+      plRetiredNames = cons("King Richard",plRetiredNames);
+      plRetiredNames = cons("Altir",plRetiredNames);
+      plRetiredNames = cons("Zardos",plRetiredNames);
+      plRetiredNames = cons("Zendar",plRetiredNames);
+      plRetiredNames = cons("Zwei",plRetiredNames);
+      plRetiredNames = cons("Zarea",plRetiredNames);
+      plRetiredNames = cons("Gandalf",plRetiredNames);
+      plRetiredNames = cons("Zathras",plRetiredNames);
+      plRetiredNames = cons("Detson",plRetiredNames);
+      plRetiredNames = cons("Geist",plRetiredNames);
+      plRetiredNames = cons("Gemini",plRetiredNames);
+      plRetiredNames = cons("Kyrra",plRetiredNames);
+      plRetiredNames = cons("Kana",plRetiredNames);
+      plRetiredNames = cons("ReQuiem",plRetiredNames);
+      plRetiredNames = cons("Izual",plRetiredNames);
+      plRetiredNames = cons("Prego",plRetiredNames);
+      plRetiredNames = cons("Thumper",plRetiredNames);
+      plRetiredNames = cons("Da Man",plRetiredNames);
+      plRetiredNames = cons("Alix",plRetiredNames);
+      plRetiredNames = cons("Psychochild",plRetiredNames);
+      plRetiredNames = cons("Aythya",plRetiredNames);
+      plRetiredNames = cons("Sif",plRetiredNames);
+      plRetiredNames = cons("Jinx",plRetiredNames);
+      plRetiredNames = cons("Sher Kahn",plRetiredNames);
+      plRetiredNames = cons("Bael",plRetiredNames);
+      plRetiredNames = cons("Kimo",plRetiredNames);
+      plRetiredNames = cons("Sol",plRetiredNames);
+      plRetiredNames = cons("Corliss",plRetiredNames);
+
+      return;
+   }
+
    AddNaughtyWord(string=$)
    {
       if string <> $
@@ -6865,9 +7028,9 @@ messages:
 
          % Give debug message for each player, describing what levels they have.
          Debug("Player ",i,Send(i,@GetTrueName)," has extra levels! Has ",
-               Nth(lSkills,1)," WC ",Nth(lSpells,1)," Shal'ille ",Nth(lSpells,2),
-               " Qor ",Nth(lSpells,3)," Kraanan ",Nth(lSpells,4)," Faren ",
-               Nth(lSpells,5)," Riija and ",Nth(lSpells,6), " Jala. Player has ",
+               First(lSkills),"WC ",First(lSpells),"Shal'ille ",Nth(lSpells,2),
+               "Qor ",Nth(lSpells,3),"Kraanan ",Nth(lSpells,4),"Faren ",
+               Nth(lSpells,5),"Riija and ",Nth(lSpells,6), "Jala. Player has ",
                Send(i,@GetRawIntellect)," intellect.");
       }
 
@@ -7682,7 +7845,7 @@ messages:
          lTempClassOrder = lClassOrder;
       }
       
-      lBaseList = Send(self,@ListCopy,#source=lItems);
+      lBaseList = ListCopy(lItems);
       
       lSortedItems = $;
       foreach cClass in lTempClassOrder

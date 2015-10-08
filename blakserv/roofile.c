@@ -9,12 +9,15 @@
  * roofile.c
  * 
  
- Utility routine to load a room file, written by Andrew.
+ Server-side implementation of a ROO file.
+ Loads the BSP tree like the client does and provides
+ BSP queries on the tree, such as LineOfSightBSP or CanMoveInRoomBSP
 
  */
 
 #include "blakserv.h"
 
+#pragma region Macros
 /*****************************************************************************************
 ********* macro functions ****************************************************************
 *****************************************************************************************/
@@ -54,9 +57,16 @@
 #define SF_SLOPED_FLOOR    0x00000400      // Sector has sloped floor
 #define SF_SLOPED_CEILING  0x00000800      // Sector has sloped ceiling
 #define WF_TRANSPARENT     0x00000002      // normal wall has some transparency
+#define WF_PASSABLE        0x00000004      // wall can be walked through
 #define WF_NOLOOKTHROUGH   0x00000020      // bitmap can't be seen through even though it's transparent
+#pragma endregion
 
-// returns floorheight additionally modified by depth sector flags
+#pragma region Internal
+/**************************************************************************************************************/
+/*                                            INTERNAL                                                        */
+/*                                   These are not defined in header                                          */
+/**************************************************************************************************************/
+
 __inline float GetSectorHeightFloorWithDepth(Sector* Sector, V2* P)
 {
    float height = SECTORHEIGHTFLOOR(Sector, P);
@@ -77,306 +87,555 @@ __inline float GetSectorHeightFloorWithDepth(Sector* Sector, V2* P)
    return height;
 }
 
-/*********************************************************************************************/
-/*
-* BSPGetHeightTree:  Returns the floor or ceiling height of a given location.
-                     Returns -MIN_KOD_INT (-134217728) for a location outside of the map.
-*/
-float BSPGetHeightTree(BspNode* Node, V2* P, bool Floor, bool WithDepth)
+void BSPUpdateLeafHeights(room_type* Room, Sector* Sector, bool Floor)
 {
-   if (!Node)
-      return (float)-MIN_KOD_INT;
+   for (int i = 0; i < Room->TreeNodesCount; i++)
+   {
+      BspNode* node = &Room->TreeNodes[i];
 
-   // reached a leaf, return its floor or ceiling height
+      if (node->Type != BspLeafType || !node->u.leaf.Sector || node->u.leaf.Sector != Sector)
+         continue;
+
+      for (int j = 0; j < node->u.leaf.PointsCount; j++)
+      {
+         V2 p = { node->u.leaf.PointsFloor[j].X, node->u.leaf.PointsFloor[j].Y };
+
+         if (Floor)
+            node->u.leaf.PointsFloor[j].Z = SECTORHEIGHTFLOOR(node->u.leaf.Sector, &p);
+
+         else
+            node->u.leaf.PointsCeiling[j].Z = SECTORHEIGHTCEILING(node->u.leaf.Sector, &p);
+      }
+   }
+}
+
+bool BSPGetHeightTree(BspNode* Node, V2* P, float* HeightF, float* HeightFWD, float* HeightC, BspLeaf** Leaf)
+{
+   // note: we don't check for other nullptrs here because caller is doing it and we're recursive..
+   if (!Node)
+      return false;
+
+   // reached a leaf
    if (Node->Type == BspLeafType && Node->u.leaf.Sector)
    {
-      if (Floor)
-      {
-         return (WithDepth) ? GetSectorHeightFloorWithDepth(Node->u.leaf.Sector, P) :
-            SECTORHEIGHTFLOOR(Node->u.leaf.Sector, P);
-      }
-      else
-         return SECTORHEIGHTCEILING(Node->u.leaf.Sector, P);
+      // set output params
+      *Leaf = &Node->u.leaf;
+      *HeightF = SECTORHEIGHTFLOOR(Node->u.leaf.Sector, P);
+      *HeightFWD = GetSectorHeightFloorWithDepth(Node->u.leaf.Sector, P);
+      *HeightC = SECTORHEIGHTCEILING(Node->u.leaf.Sector, P);
+      return true;
    }
 
    // still internal node, climb down only one subtree
    else if (Node->Type == BspInternalType)
    {
       return (DISTANCETOSPLITTERSIGNED(&Node->u.internal, P) >= 0.0f) ?
-         BSPGetHeightTree(Node->u.internal.RightChild, P, Floor, WithDepth) :
-         BSPGetHeightTree(Node->u.internal.LeftChild, P, Floor, WithDepth);
+         BSPGetHeightTree(Node->u.internal.RightChild, P, HeightF, HeightFWD, HeightC, Leaf) :
+         BSPGetHeightTree(Node->u.internal.LeftChild, P, HeightF, HeightFWD, HeightC, Leaf);
    }
 
-   return (float)-MIN_KOD_INT;
+   return false;
 }
 
-/*********************************************************************************************/
-/*
-* BSPGetHeight:  Returns the floor or ceiling height in a room for a given location.
-                 Returns -MIN_KOD_INT (-134217728) for a location outside of the map.
-*/
-float BSPGetHeight(room_type* Room, V2* P, bool Floor, bool WithDepth)
-{
-   if (!Room || Room->TreeNodesCount == 0 || !P)
-      return 0.0f;
-
-   return BSPGetHeightTree(&Room->TreeNodes[0], P, Floor, WithDepth);
-}
-
-/*********************************************************************************************/
-/*
-* BSPLineOfSightTree:  Checks if location E(nd) can be seen from location S(tart)
-*/
 bool BSPLineOfSightTree(BspNode* Node, V3* S, V3* E)
 {
-   if (!Node)
-      return true;
+	if (!Node)
+		return true;
 
-   /****************************************************************/
+	/****************************************************************/
 
-   // reached a leaf
-   if (Node->Type == BspLeafType)
-   {
-      // no collisions with leafs without sectors
-      if (!Node->u.leaf.Sector)
-         return true;
+	// reached a leaf
+	if (Node->Type == BspLeafType)
+	{
+		// no collisions with leafs without sectors
+		if (!Node->u.leaf.Sector)
+			return true;
 
-      // floors and ceilings don't have backsides.
-      // therefore a floor can only collide if
-      // the start height is bigger than end height
-      // and for ceiling the other way round.
-      if (S->Z > E->Z && Node->u.leaf.Sector->FloorTexture > 0)
-      {
-         for (int i = 0; i < Node->u.leaf.PointsCount - 2; i++)
-         {
-            bool blocked = IntersectLineTriangle(
-               &Node->u.leaf.PointsFloor[i + 2],
-               &Node->u.leaf.PointsFloor[i + 1],
-               &Node->u.leaf.PointsFloor[0], S, E);
+		// floors and ceilings don't have backsides.
+		// therefore a floor can only collide if
+		// the start height is bigger than end height
+		// and for ceiling the other way round.
+		if (S->Z > E->Z && Node->u.leaf.Sector->FloorTexture > 0)
+		{
+			for (int i = 0; i < Node->u.leaf.PointsCount - 2; i++)
+			{
+				bool blocked = IntersectLineTriangle(
+					&Node->u.leaf.PointsFloor[i + 2],
+					&Node->u.leaf.PointsFloor[i + 1],
+					&Node->u.leaf.PointsFloor[0], S, E);
 
-            // blocked by floor
-            if (blocked)
-            {
+				// blocked by floor
+				if (blocked)
+				{
 #if DEBUGLOS
-               dprintf("BLOCK - FLOOR");
+					dprintf("BLOCK - FLOOR");
 #endif
-               return false;
-            }
-         }
-      }
+					return false;
+				}
+			}
+		}
 
-      else if (S->Z < E->Z && Node->u.leaf.Sector->CeilingTexture > 0)
-      {
-         for (int i = 0; i < Node->u.leaf.PointsCount - 2; i++)
-         {
-            bool blocked = IntersectLineTriangle(
-               &Node->u.leaf.PointsCeiling[i + 2],
-               &Node->u.leaf.PointsCeiling[i + 1],
-               &Node->u.leaf.PointsCeiling[0], S, E);
+		else if (S->Z < E->Z && Node->u.leaf.Sector->CeilingTexture > 0)
+		{
+			for (int i = 0; i < Node->u.leaf.PointsCount - 2; i++)
+			{
+				bool blocked = IntersectLineTriangle(
+					&Node->u.leaf.PointsCeiling[i + 2],
+					&Node->u.leaf.PointsCeiling[i + 1],
+					&Node->u.leaf.PointsCeiling[0], S, E);
 
-            // blocked by ceiling
-            if (blocked)
-            {
+				// blocked by ceiling
+				if (blocked)
+				{
 #if DEBUGLOS
-               dprintf("BLOCK - CEILING");
+					dprintf("BLOCK - CEILING");
 #endif
-               return false;
-            }
-         }
-      }
+					return false;
+				}
+			}
+		}
 
-      // not blocked by this leaf
-      return true;
-   }
+		// not blocked by this leaf
+		return true;
+	}
 
-   /****************************************************************/
+	/****************************************************************/
 
-   // expecting anything else/below to be a splitter
-   if (Node->Type != BspInternalType)
-      return true;
+	// expecting anything else/below to be a splitter
+	if (Node->Type != BspInternalType)
+		return true;
 
-   // get signed distances to both endpoints of ray
-   float distS = DISTANCETOSPLITTERSIGNED(&Node->u.internal, S);
-   float distE = DISTANCETOSPLITTERSIGNED(&Node->u.internal, E);
+	// get signed distances to both endpoints of ray
+	float distS = DISTANCETOSPLITTERSIGNED(&Node->u.internal, S);
+	float distE = DISTANCETOSPLITTERSIGNED(&Node->u.internal, E);
 
-   /****************************************************************/
+	/****************************************************************/
 
-   // both endpoints on positive (right) side
-   // --> climb down only right subtree
-   if (distS > EPSILON && distE > EPSILON)
-      return BSPLineOfSightTree(Node->u.internal.RightChild, S, E);
+	// both endpoints on positive (right) side
+	// --> climb down only right subtree
+	if (distS > EPSILON && distE > EPSILON)
+		return BSPLineOfSightTree(Node->u.internal.RightChild, S, E);
 
-   // both endpoints on negative (left) side
-   // --> climb down only left subtree
-   else if (distS < -EPSILON && distE < -EPSILON)
-      return BSPLineOfSightTree(Node->u.internal.LeftChild, S, E);
+	// both endpoints on negative (left) side
+	// --> climb down only left subtree
+	else if (distS < -EPSILON && distE < -EPSILON)
+		return BSPLineOfSightTree(Node->u.internal.LeftChild, S, E);
 
-   // endpoints are on different sides or one/both on infinite line
-   // --> check walls of splitter first and then possibly climb down both
-   else
-   {
-      // loop through walls in this splitter and check for collision
-      Wall* wall = Node->u.internal.FirstWall;
-      while (wall)
-      {
-         // must have at least a sector on one side of the wall
-         // otherwise skip this wall
-         if (!wall->RightSector && !wall->LeftSector)
-         {
-            wall = wall->NextWallInPlane;
-            continue;
-         }
+	// endpoints are on different sides or one/both on infinite line
+	// --> check walls of splitter first and then possibly climb down both
+	else
+	{
+		// loop through walls in this splitter and check for collision
+		Wall* wall = Node->u.internal.FirstWall;
+		while (wall)
+		{
+			// must have at least a sector on one side of the wall
+			// otherwise skip this wall
+			if (!wall->RightSector && !wall->LeftSector)
+			{
+				wall = wall->NextWallInPlane;
+				continue;
+			}
 
-         // pick side ray is coming from
-         Side* side = (distS > 0.0f) ? wall->RightSide : wall->LeftSide;
+			// pick side ray is coming from
+			Side* side = (distS > 0.0f) ? wall->RightSide : wall->LeftSide;
 
-         // no collision with unset sides
-         if (!side)
-         {
-            wall = wall->NextWallInPlane;
-            continue;
-         }
+			// no collision with unset sides
+			if (!side)
+			{
+				wall = wall->NextWallInPlane;
+				continue;
+			}
 
-         // get 2d line equation coefficients for infinite line through S and E
-         float a1, b1, c1;
-         a1 = E->Y - S->Y;
-         b1 = S->X - E->X;
-         c1 = a1 * S->X + b1 * S->Y;
+			// get 2d line equation coefficients for infinite line through S and E
+			float a1, b1, c1;
+			a1 = E->Y - S->Y;
+			b1 = S->X - E->X;
+			c1 = a1 * S->X + b1 * S->Y;
 
-         // get 2d line equation coefficients for infinite line through P1 and P2
-         // NOTE: This should be using BspInternal A,B,C coefficients
-         float a2, b2, c2;
-         a2 = wall->P2.Y - wall->P1.Y;
-         b2 = wall->P1.X - wall->P2.X;
-         c2 = a2 * wall->P1.X + b2 * wall->P1.Y;
+			// get 2d line equation coefficients for infinite line through P1 and P2
+			// NOTE: This should be using BspInternal A,B,C coefficients
+			float a2, b2, c2;
+			a2 = wall->P2.Y - wall->P1.Y;
+			b2 = wall->P1.X - wall->P2.X;
+			c2 = a2 * wall->P1.X + b2 * wall->P1.Y;
 
-         float det = a1*b2 - a2*b1;
+			float det = a1*b2 - a2*b1;
 
-         // parallel (or identical) lines
-         if (ISZERO(det))
-         {
-            wall = wall->NextWallInPlane;
-            continue;
-         }
+			// parallel (or identical) lines
+			if (ISZERO(det))
+			{
+				wall = wall->NextWallInPlane;
+				continue;
+			}
 
-         // intersection point of infinite lines
-         V2 q;
-         q.X = (b2*c1 - b1*c2) / det;
-         q.Y = (a1*c2 - a2*c1) / det;
+			// intersection point of infinite lines
+			V2 q;
+			q.X = (b2*c1 - b1*c2) / det;
+			q.Y = (a1*c2 - a2*c1) / det;
 
-         //dprintf("intersect: %f %f \t p1.x:%f p1.y:%f p2.x:%f p2.y:%f \n", q.X, q.Y, wall->P1.X, wall->P1.Y, wall->P2.X, wall->P2.Y);
+			//dprintf("intersect: %f %f \t p1.x:%f p1.y:%f p2.x:%f p2.y:%f \n", q.X, q.Y, wall->P1.X, wall->P1.Y, wall->P2.X, wall->P2.Y);
 
-         // infinite intersection point must be in BOTH
-         // finite segments boundingboxes, otherwise no intersect
-         if (!ISINBOX(S, E, &q) || !ISINBOX(&wall->P1, &wall->P2, &q))
-         {
-            wall = wall->NextWallInPlane;
-            continue;
-         }
+			// infinite intersection point must be in BOTH
+			// finite segments boundingboxes, otherwise no intersect
+			if (!ISINBOX(S, E, &q) || !ISINBOX(&wall->P1, &wall->P2, &q))
+			{
+				wall = wall->NextWallInPlane;
+				continue;
+			}
 
-         // vector from (S)tart to (E)nd
-         V3 se;
-         V3SUB(&se, E, S);
+			// vector from (S)tart to (E)nd
+			V3 se;
+			V3SUB(&se, E, S);
 
-         // find rayheight of (S->E) at intersection point
-         float lambda = 1.0f;
-         if (!ISZERO(se.X))
-            lambda = (q.X - S->X) / se.X;
+			// find rayheight of (S->E) at intersection point
+			float lambda = 1.0f;
+			if (!ISZERO(se.X))
+				lambda = (q.X - S->X) / se.X;
 
-         else if (!ISZERO(se.Y))
-            lambda = (q.Y - S->Y) / se.Y;
+			else if (!ISZERO(se.Y))
+				lambda = (q.Y - S->Y) / se.Y;
 
-         float rayheight = S->Z + lambda * se.Z;
+			float rayheight = S->Z + lambda * se.Z;
 
-         // get heights of right and left floor/ceiling
-         float hFloorRight = (wall->RightSector) ?
-            SECTORHEIGHTFLOOR(wall->RightSector, &q) :
-            SECTORHEIGHTFLOOR(wall->LeftSector, &q);
+			// get heights of right and left floor/ceiling
+			float hFloorRight = (wall->RightSector) ?
+				SECTORHEIGHTFLOOR(wall->RightSector, &q) :
+				SECTORHEIGHTFLOOR(wall->LeftSector, &q);
 
-         float hFloorLeft = (wall->LeftSector) ?
-            SECTORHEIGHTFLOOR(wall->LeftSector, &q) :
-            SECTORHEIGHTFLOOR(wall->RightSector, &q);
+			float hFloorLeft = (wall->LeftSector) ?
+				SECTORHEIGHTFLOOR(wall->LeftSector, &q) :
+				SECTORHEIGHTFLOOR(wall->RightSector, &q);
 
-         float hCeilingRight = (wall->RightSector) ?
-            SECTORHEIGHTCEILING(wall->RightSector, &q) :
-            SECTORHEIGHTCEILING(wall->LeftSector, &q);
+			float hCeilingRight = (wall->RightSector) ?
+				SECTORHEIGHTCEILING(wall->RightSector, &q) :
+				SECTORHEIGHTCEILING(wall->LeftSector, &q);
 
-         float hCeilingLeft = (wall->LeftSector) ?
-            SECTORHEIGHTCEILING(wall->LeftSector, &q) :
-            SECTORHEIGHTCEILING(wall->RightSector, &q);
+			float hCeilingLeft = (wall->LeftSector) ?
+				SECTORHEIGHTCEILING(wall->LeftSector, &q) :
+				SECTORHEIGHTCEILING(wall->RightSector, &q);
 
-         // build all 4 possible heights (h0 lowest)
-         float h3 = fmax(hCeilingRight, hCeilingLeft);
-         float h2 = fmax(fmin(hCeilingRight, hCeilingLeft), fmax(hFloorRight, hFloorLeft));
-         float h1 = fmin(fmin(hCeilingRight, hCeilingLeft), fmax(hFloorRight, hFloorLeft));
-         float h0 = fmin(hFloorRight, hFloorLeft);
+			// build all 4 possible heights (h0 lowest)
+			float h3 = fmax(hCeilingRight, hCeilingLeft);
+			float h2 = fmax(fmin(hCeilingRight, hCeilingLeft), fmax(hFloorRight, hFloorLeft));
+			float h1 = fmin(fmin(hCeilingRight, hCeilingLeft), fmax(hFloorRight, hFloorLeft));
+			float h0 = fmin(hFloorRight, hFloorLeft);
 
-         // above maximum or below minimum
-         if (rayheight > h3 || rayheight < h0)
-         {
-            wall = wall->NextWallInPlane;
-            continue;
-         }
+			// above maximum or below minimum
+			if (rayheight > h3 || rayheight < h0)
+			{
+				wall = wall->NextWallInPlane;
+				continue;
+			}
 
-         // ray intersects middle wall texture
-         if (rayheight <= h2 && rayheight >= h1 && side->TextureMiddle > 0)
-         {
-            // get some flags from the side we're coming from
-            // these are applied only to the 'main' = 'middle' texture
-            bool isNoLookThrough = ((side->Flags & WF_NOLOOKTHROUGH) == WF_NOLOOKTHROUGH);
-            bool isTransparent   = ((side->Flags & WF_TRANSPARENT) == WF_TRANSPARENT);
+			// ray intersects middle wall texture
+			if (rayheight <= h2 && rayheight >= h1 && side->TextureMiddle > 0)
+			{
+				// get some flags from the side we're coming from
+				// these are applied only to the 'main' = 'middle' texture
+				bool isNoLookThrough = ((side->Flags & WF_NOLOOKTHROUGH) == WF_NOLOOKTHROUGH);
+				bool isTransparent   = ((side->Flags & WF_TRANSPARENT) == WF_TRANSPARENT);
 
-            // 'transparent' middle textures block only
-            // if they are set so by 'no-look-through'
-            if (!isTransparent || (isTransparent && isNoLookThrough))
-            {
+				// 'transparent' middle textures block only
+				// if they are set so by 'no-look-through'
+				if (!isTransparent || (isTransparent && isNoLookThrough))
+				{
 #if DEBUGLOS
-               dprintf("WALL %i - MID - (%f/%f/%f)", wall->Num, q.X, q.Y, rayheight);
+					dprintf("WALL %i - MID - (%f/%f/%f)", wall->Num, q.X, q.Y, rayheight);
 #endif
-               return false;
-            }
-         }
+					return false;
+				}
+			}
 
-         // ray intersects upper wall texture
-         if (rayheight <= h3 && rayheight >= h2 && side->TextureUpper > 0)
-         {
+			// ray intersects upper wall texture
+			if (rayheight <= h3 && rayheight >= h2 && side->TextureUpper > 0)
+			{
 #if DEBUGLOS
-            dprintf("WALL %i - UP - (%f/%f/%f)", wall->Num, q.X, q.Y, rayheight);
+				dprintf("WALL %i - UP - (%f/%f/%f)", wall->Num, q.X, q.Y, rayheight);
 #endif
-            return false;
-         }
+				return false;
+			}
 
-         // ray intersects lower wall texture
-         if (rayheight <= h1 && rayheight >= h0 && side->TextureLower > 0)				
-         {
+			// ray intersects lower wall texture
+			if (rayheight <= h1 && rayheight >= h0 && side->TextureLower > 0)
+			{
 #if DEBUGLOS
-            dprintf("WALL %i - LOW - (%f/%f/%f)", wall->Num, q.X, q.Y, rayheight);
+				dprintf("WALL %i - LOW - (%f/%f/%f)", wall->Num, q.X, q.Y, rayheight);
 #endif
-            return false;
-         }
+				return false;
+			}
 
-         // next wall for next loop
-         wall = wall->NextWallInPlane;
-      }
+			// next wall for next loop
+			wall = wall->NextWallInPlane;
+		}
 
-      /****************************************************************/
+		/****************************************************************/
 
-      // try right subtree first
-      bool retval = BSPLineOfSightTree(Node->u.internal.RightChild, S, E);
+		// try right subtree first
+		bool retval = BSPLineOfSightTree(Node->u.internal.RightChild, S, E);
 
-      // found a collision there? return it
-      if (!retval)
-         return retval;
+		// found a collision there? return it
+		if (!retval)
+			return retval;
 
-      // otherwise try left subtree
-      return BSPLineOfSightTree(Node->u.internal.LeftChild, S, E);
-   }
+		// otherwise try left subtree
+		return BSPLineOfSightTree(Node->u.internal.LeftChild, S, E);
+	}
+}
+
+bool BSPCanMoveInRoomTree(BspNode* Node, V2* S, V2* E)
+{
+	// reached a leaf or nullchild, movements not blocked by leafs
+	if (!Node || Node->Type != BspInternalType)
+		return true;
+
+	/****************************************************************/
+
+	// get signed distances from splitter to both endpoints of move
+	float distS = DISTANCETOSPLITTERSIGNED(&Node->u.internal, S);
+	float distE = DISTANCETOSPLITTERSIGNED(&Node->u.internal, E);
+
+	/****************************************************************/
+
+	// both endpoints far away enough on positive (right) side
+	// --> climb down only right subtree
+	if (distS > WALLMINDISTANCE && distE > WALLMINDISTANCE)
+		return BSPCanMoveInRoomTree(Node->u.internal.RightChild, S, E);
+
+	// both endpoints far away enough on negative (left) side
+	// --> climb down only left subtree
+	else if (distS < -WALLMINDISTANCE && distE < -WALLMINDISTANCE)
+		return BSPCanMoveInRoomTree(Node->u.internal.LeftChild, S, E);
+
+	// endpoints are on different sides, one/both on infinite line or potentially too close
+	// --> check walls of splitter first and then possibly climb down both subtrees
+	else
+	{
+		// loop through walls in this splitter
+		Wall* wall = Node->u.internal.FirstWall;
+		while (wall)
+		{
+			// these will be filled by two cases below
+			V2 q;
+			Side* sideS;
+			Sector* sectorS;
+			Side* sideE;
+			Sector* sectorE;
+
+			// CASE 1) The move line actually crosses this infinite splitter.
+			// This case handles long movelines where S and E can be far away from each other and
+			// just checking the distance of E to the line would fail.
+			// q contains the intersection point
+			if ((distS > 0.0f && distE < 0.0f) ||
+				(distS < 0.0f && distE > 0.0f))
+			{
+				// get 2d line equation coefficients for infinite line through S and E
+				float a1, b1, c1;
+				a1 = E->Y - S->Y;
+				b1 = S->X - E->X;
+				c1 = a1 * S->X + b1 * S->Y;
+
+				// get 2d line equation coefficients for infinite line through P1 and P2
+				// NOTE: This should be using BspInternal A,B,C coefficients
+				float a2, b2, c2;
+				a2 = wall->P2.Y - wall->P1.Y;
+				b2 = wall->P1.X - wall->P2.X;
+				c2 = a2 * wall->P1.X + b2 * wall->P1.Y;
+
+				float det = a1*b2 - a2*b1;
+
+				// parallel (or identical) lines
+				// should not happen here but is important for div by 0
+				if (ISZERO(det))
+				{
+					wall = wall->NextWallInPlane;
+					continue;
+				}
+
+				// intersection point of infinite lines				
+				q.X = (b2*c1 - b1*c2) / det;
+				q.Y = (a1*c2 - a2*c1) / det;
+
+				//dprintf("intersect: %f %f \t p1.x:%f p1.y:%f p2.x:%f p2.y:%f \n", q.X, q.Y, wall->P1.X, wall->P1.Y, wall->P2.X, wall->P2.Y);
+
+				// infinite intersection point must be in BOTH
+				// finite segments boundingboxes, otherwise no intersect
+				if (!ISINBOX(S, E, &q) || !ISINBOX(&wall->P1, &wall->P2, &q))
+				{
+					wall = wall->NextWallInPlane;
+					continue;
+				}
+
+				// set from and to sector / side
+				if (distS > 0.0f)
+				{
+					sideS = wall->RightSide;
+					sectorS = wall->RightSector;
+				}
+				else
+				{
+					sideS = wall->LeftSide;
+					sectorS = wall->LeftSector;
+				}
+
+				if (distE > 0.0f)
+				{
+					sideE = wall->RightSide;
+					sectorE = wall->RightSector;
+				}
+				else
+				{
+					sideE = wall->LeftSide;
+					sectorE = wall->LeftSector;
+				}
+			}
+
+			// CASE 2) The move line does not cross the infinite splitter, both move endpoints are on the same side.
+			// This handles short moves where walls are not intersected, but the endpoint may be too close
+			// q will store the too-close endpoint
+			else
+			{
+				// allow getting "away" from wall (distS, distE are signed)
+				// even in case both endpoints would be too close
+				if (fabs(distE) > fabs(distS))
+				{
+					wall = wall->NextWallInPlane;
+					continue;
+				}
+
+				// get min. squared distance from move endpoint to line segment
+				float dist2 = MinSquaredDistanceToLineSegment(E, &wall->P1, &wall->P2);
+
+				// skip if far enough away
+				if (dist2 > WALLMINDISTANCE2)
+				{
+					wall = wall->NextWallInPlane;
+					continue;
+				}
+
+				q.X = E->X;
+				q.Y = E->Y;
+
+				// set from and to sector / side
+				// for case 2 (too close) these are based on (S),
+				// and (E) is assumed to be on the other side.
+				if (distS >= 0.0f)
+				{
+					sideS = wall->RightSide;
+					sectorS = wall->RightSector;
+					sideE = wall->LeftSide;
+					sectorE = wall->LeftSector;
+				}
+				else
+				{
+					sideS = wall->LeftSide;
+					sectorS = wall->LeftSector;
+					sideE = wall->RightSide;
+					sectorE = wall->RightSector;
+				}
+			}
+
+			/****************************************/
+			/*   From here on both cases together   */
+			/****************************************/
+
+			// block moves with end outside
+			if (!sectorE || !sideE)
+			{
+#if DEBUGMOVE
+				dprintf("MOVEBLOCK (END OUTSIDE): W:%i", wall->Num);
+#endif
+				return false;
+			}
+
+			// don't block moves with start outside (and end inside, see above)
+			if (!sectorS || !sideS)
+			{
+#if DEBUGMOVE
+				dprintf("MOVEALLOW (START OUT, END IN): W:%i", wall->Num);
+#endif
+				wall = wall->NextWallInPlane;
+				continue;
+			}
+
+			// sides which have no passable flag set always block
+			if (!((sideS->Flags & WF_PASSABLE) == WF_PASSABLE))
+				return false;
+
+			// get heights
+			float hFloorS = GetSectorHeightFloorWithDepth(sectorS, &q);
+			float hFloorE = GetSectorHeightFloorWithDepth(sectorE, &q);
+			float hCeilingS = SECTORHEIGHTCEILING(sectorS, &q);
+			float hCeilingE = SECTORHEIGHTCEILING(sectorE, &q);
+
+			// check stepheight (this also requires a lower texture set)
+			if (sideS->TextureLower > 0 && (hFloorE - hFloorS > MAXSTEPHEIGHT))
+			{
+#if DEBUGMOVE
+				dprintf("MOVEBLOCK (STEPHEIGHT): W:%i HFS:%1.2f HFE:%1.2f", wall->Num, hFloorS, hFloorE);
+#endif
+				return false;
+			}
+
+			// check ceilingheight (this also requires an upper texture set)
+			if (sideS->TextureUpper > 0 && (hCeilingE - hFloorS < OBJECTHEIGHTROO))
+			{
+#if DEBUGMOVE
+				dprintf("MOVEBLOCK (UPWALL): W:%i HFS:%1.2f HCE:%1.2f", wall->Num, hFloorS, hCeilingE);
+#endif
+				return false;
+			}
+
+			// check endsector height
+			if (hCeilingE - hFloorE < OBJECTHEIGHTROO)
+			{
+#if DEBUGMOVE
+				dprintf("MOVEBLOCK (SECTHEIGHT): W:%i HFE:%1.2f HCE:%1.2f", wall->Num, hFloorE, hCeilingE);
+#endif
+				return false;
+			}
+
+			// next wall for next loop
+			wall = wall->NextWallInPlane;
+		}
+
+		/****************************************************************/
+
+		// try right subtree first
+		bool retval = BSPCanMoveInRoomTree(Node->u.internal.RightChild, S, E);
+
+		// found a collision there? return it
+		if (!retval)
+			return retval;
+
+		// otherwise try left subtree
+		return BSPCanMoveInRoomTree(Node->u.internal.LeftChild, S, E);
+	}
+}
+#pragma endregion
+
+#pragma region Public
+/**************************************************************************************************************/
+/*                                            PUBLIC                                                          */
+/*                     These are defined in header and can be called from outside                             */
+/**************************************************************************************************************/
+
+/*********************************************************************************************/
+/* BSPGetHeight:  Returns true if location is inside any sector, false otherwise.
+/*                  If true, heights are in parameters HeightF (floor), 
+/*				    HeightFWD (floor with depth) and HeightC (ceiling) and Leaf is valid.
+/*********************************************************************************************/
+bool BSPGetHeight(room_type* Room, V2* P, float* HeightF, float* HeightFWD, float* HeightC, BspLeaf** Leaf)
+{
+   if (!Room || Room->TreeNodesCount == 0 || !P || !HeightF || !HeightFWD || !HeightC)
+      return false;
+
+   return BSPGetHeightTree(&Room->TreeNodes[0], P, HeightF, HeightFWD, HeightC, Leaf);
 }
 
 /*********************************************************************************************/
-/*
-* BSPLineOfSight:  Checks if location E(nd) can be seen from location S(tart)
-*/
+/* BSPLineOfSight:  Checks if location E(nd) can be seen from location S(tart)               */
+/*********************************************************************************************/
 bool BSPLineOfSight(room_type* Room, V3* S, V3* E)
 {
    if (!Room || Room->TreeNodesCount == 0 || !S || !E)
@@ -386,9 +645,91 @@ bool BSPLineOfSight(room_type* Room, V3* S, V3* E)
 }
 
 /*********************************************************************************************/
-/*
-* BSPChangeTexture:  Sets textures of sides and/or sectors to given NewTexture num based on Flags
-*/
+/* BSPCanMoveInRoom:  Checks if you can walk a straight line from (S)tart to (E)nd           */
+/*********************************************************************************************/
+bool BSPCanMoveInRoom(room_type* Room, V2* S, V2* E, int ObjectID, bool moveOutsideBSP)
+{
+   if (!Room || Room->TreeNodesCount == 0 || !S || !E)
+      return false;
+
+   // allow move to same location
+   if (ISZERO(S->X - E->X) && ISZERO(S->Y - E->Y))
+   {
+#if DEBUGMOVE
+      dprintf("MOVEALLOW (START=END)");
+#endif
+      return true;
+   }
+
+   // first check against room geometry
+   bool roomok = (moveOutsideBSP || BSPCanMoveInRoomTree(&Room->TreeNodes[0], S, E));
+
+   // already found a collision in room
+   if (!roomok)
+      return false;
+
+   // otherwise also check against blockers
+   Blocker* blocker = Room->Blocker;
+   while (blocker)
+   {
+      // don't block ourself
+      if (blocker->ObjectID == ObjectID)
+      {
+         blocker = blocker->Next;
+         continue;
+      }
+
+      V2 ms; // from m to s  
+      V2SUB(&ms, S, &blocker->Position);
+      float ds2 = V2LEN2(&ms);
+
+      // CASE 1) Start is too close
+      // Note: IntersectLineCircle below will reject moves starting or ending exactly
+      //   on the circle as well as moves going from inside to outside of the circle.
+      //   So this case here must handle moves until the object is out of radius again.
+      if (ds2 <= OBJMINDISTANCE2)
+      {
+         V2 me;
+         V2SUB(&me, E, &blocker->Position); // from m to e
+         float de2 = V2LEN2(&me);
+
+         // end must be farer away than start
+         if (de2 <= ds2)
+            return false;
+
+         // step (se) must also point towards +-90° of the straight step-away direction (ms)
+         // if it's not starting exactly on S (if so there's no straight step-away dir and all are allowed)
+         if (ds2 > EPSILON)
+         {
+            V2 se;
+            V2SUB(&se, E, S); // from s to e
+            float angle = acosf(V2DOT(&ms, &se));
+
+            if (angle < -M_PI_2 || angle > M_PI_2)
+               return false;
+		 }
+      }
+
+      // CASE 2) Start is outside blockradius, verify by intersection algorithm.
+      else
+      {
+         if (IntersectLineCircle(&blocker->Position, OBJMINDISTANCE, S, E))
+         {
+#if DEBUGMOVE
+            dprintf("MOVEBLOCK BY OBJ %i",blocker->ObjectID);
+#endif
+            return false;
+         }
+      }
+      blocker = blocker->Next;
+   }
+
+   return true;
+}
+
+/*********************************************************************************************/
+/* BSPChangeTexture: Sets textures of sides and/or sectors to given NewTexture num based on Flags
+/*********************************************************************************************/
 void BSPChangeTexture(room_type* Room, unsigned int ServerID, unsigned short NewTexture, unsigned int Flags)
 {
    bool isAboveWall  = ((Flags & CTF_ABOVEWALL) == CTF_ABOVEWALL);
@@ -441,36 +782,9 @@ void BSPChangeTexture(room_type* Room, unsigned int ServerID, unsigned short New
 }
 
 /*********************************************************************************************/
-/*
-* BSPUpdateTreeLeafHeights:  Refreshes the cached Z coordinate of floor/ceiling leaf poly points
-*/
-void BSPUpdateLeafHeights(room_type* Room, Sector* Sector, bool Floor)
-{
-   for (int i = 0; i < Room->TreeNodesCount; i++)
-   {
-      BspNode* node = &Room->TreeNodes[i];
-
-      if (node->Type != BspLeafType || !node->u.leaf.Sector || node->u.leaf.Sector != Sector)
-         continue;
-
-      for (int j = 0; j < node->u.leaf.PointsCount; j++)
-      {
-         V2 p = { node->u.leaf.PointsFloor[j].X, node->u.leaf.PointsFloor[j].Y };
-
-         if (Floor)
-            node->u.leaf.PointsFloor[j].Z = SECTORHEIGHTFLOOR(node->u.leaf.Sector, &p);
-
-         else
-            node->u.leaf.PointsCeiling[j].Z = SECTORHEIGHTCEILING(node->u.leaf.Sector, &p);
-      }
-   }
-}
-
+/* BSPMoveSector:  Adjust floor or ceiling height of a non-sloped sector. 
+/*                 Always instant for now. Otherwise only for speed=0. Height must be in 1:1024.
 /*********************************************************************************************/
-/*
-* BSPMoveSector:  Adjust floor or ceiling height of a non-sloped sector. 
-*                 Always instant for now. Otherwise only for speed=0. Height must be in 1:1024.
-*/
 void BSPMoveSector(room_type* Room, unsigned int ServerID, bool Floor, float Height, float Speed)
 {
    for (int i = 0; i < Room->SectorsCount; i++)
@@ -498,17 +812,518 @@ void BSPMoveSector(room_type* Room, unsigned int ServerID, bool Floor, float Hei
 }
 
 /*********************************************************************************************/
-/*
- * BSPRooFileLoadServer:  Fill "room" with server-relevant data from given roo file.
- *   Return True on success.
- */
-Bool BSPRooFileLoadServer(char *fname, room_type *room)
+/* BSPGetLocationInfo:  Returns several infos about a location depending on 'QueryFlags'
+/*********************************************************************************************/
+bool BSPGetLocationInfo(room_type* Room, V2* P, unsigned int QueryFlags, unsigned int* ReturnFlags,
+                        float* HeightF, float* HeightFWD, float* HeightC, BspLeaf** Leaf)
+{
+   if (!Room || !P || !ReturnFlags)
+      return false;
+
+   // see what to query
+   bool isCheckThingsBox = ((QueryFlags & LIQ_CHECK_THINGSBOX) == LIQ_CHECK_THINGSBOX);
+   bool isCheckOjectBlock = ((QueryFlags & LIQ_CHECK_OBJECTBLOCK) == LIQ_CHECK_OBJECTBLOCK);
+   bool isGetSectorInfo = ((QueryFlags & LIQ_GET_SECTORINFO) == LIQ_GET_SECTORINFO);
+   
+   // check if output parameters are provided if query-type needs them
+   if (isGetSectorInfo && (!HeightF || !HeightFWD || !HeightC || !Leaf))
+      return false;
+
+   // default returnflags
+   *ReturnFlags = 0;
+
+   // check outside thingsbox
+   if (isCheckThingsBox)
+   {
+      // out west
+      if (P->X <= Room->ThingsBox.Min.X)
+         *ReturnFlags |= LIR_TBOX_OUT_W;
+
+      // out east
+      else if (P->X >= Room->ThingsBox.Max.X)
+         *ReturnFlags |= LIR_TBOX_OUT_E;
+
+      // out north
+      if (P->Y <= Room->ThingsBox.Min.Y)
+         *ReturnFlags |= LIR_TBOX_OUT_N;
+
+      // out south
+      else if (P->Y >= Room->ThingsBox.Max.Y)
+         *ReturnFlags |= LIR_TBOX_OUT_S;
+   }
+
+   // check too close to blocker
+   if (isCheckOjectBlock)
+   {
+      Blocker* blocker = Room->Blocker;
+      while (blocker)
+      {
+         V2 b;
+         V2SUB(&b, P, &blocker->Position);
+
+         // too close
+         if (V2LEN2(&b) < OBJMINDISTANCE2)
+         {
+            *ReturnFlags |= LIR_BLOCKED_OBJECT;
+            break;
+         }
+         blocker = blocker->Next;
+      }
+   }
+
+   // bsp lookup
+   if (isGetSectorInfo && BSPGetHeight(Room, P, HeightF, HeightFWD, HeightC, Leaf))
+   {
+      *ReturnFlags |= LIR_SECTOR_INSIDE;
+
+      if ((*Leaf)->Sector->FloorTexture > 0)
+         *ReturnFlags |= LIR_SECTOR_HASFTEX;
+
+      if ((*Leaf)->Sector->CeilingTexture > 0)
+         *ReturnFlags |= LIR_SECTOR_HASCTEX;
+   }
+
+   return true;
+}
+
+/*********************************************************************************************/
+/* BSPGetRandomPoint: Tries up to 'MaxAttempts' times to create a randompoint in 'Room'.
+/*                    If return is true, P's coordinates are guaranteed to be:
+/*                    (a) inside a sector (b) inside thingsbox (c) outside any obj blockradius
+/*********************************************************************************************/
+bool BSPGetRandomPoint(room_type* Room, int MaxAttempts, V2* P)
+{
+	if (!Room || !P)
+		return false;
+
+	float heightF, heightFWD, heightC;
+	BspLeaf* leaf = NULL;
+
+	for (int i = 0; i < MaxAttempts; i++)
+	{
+		// generate random coordinates inside the things box
+		// we first map the random value to [0.0f , 1.0f] and then to [0.0f , BBOXMAX]
+		// note: the minimum of thingsbox is always at 0/0
+		P->X = ((float)rand() / (float)RAND_MAX) * Room->ThingsBox.Max.X;
+		P->Y = ((float)rand() / (float)RAND_MAX) * Room->ThingsBox.Max.Y;
+
+		// make sure point is exactly expressable in KOD fineness units also
+		P->X = (float)ROUNDROOTOKODFINENESS(P->X);
+		P->Y = (float)ROUNDROOTOKODFINENESS(P->Y);
+
+		// 1. check for inside valid sector, otherwise roll again
+		// note: locations quite close to a wall pass this check!
+		if (!BSPGetHeight(Room, P, &heightF, &heightFWD, &heightC, &leaf))
+			continue;
+		
+		// 2. must also have floor texture set
+		if (leaf && leaf->Sector->FloorTexture == 0)
+			continue;
+
+		// 3. check for being too close to a blocker
+		Blocker* blocker = Room->Blocker;
+		bool collision = false;
+		while (blocker)
+		{
+			V2 b;
+			V2SUB(&b, P, &blocker->Position);
+
+			// too close
+			if (V2LEN2(&b) < OBJMINDISTANCE2)
+			{
+				collision = true;
+				break;
+			}
+
+			blocker = blocker->Next;
+		}
+
+		// too close to a blocker, roll again
+		if (collision)
+			continue;
+
+		// all good with P
+		return true;
+	}
+
+	// max attempts reached without success
+	return false;
+}
+
+/*********************************************************************************************/
+/* BSPGetStepTowards:  Returns a location in P param, in a distant of 16 kod fineness units
+/*                     away from S on the way towards E.
+/*********************************************************************************************/
+bool BSPGetStepTowards(room_type* Room, V2* S, V2* E, V2* P, unsigned int* Flags, int ObjectID)
+{
+   if (!Room || !S || !E || !P || !Flags)
+      return false;
+
+   // Monsters that can move through walls or outside the tree will
+   // send this flag with state.
+   bool moveOutsideBSP = ((*Flags & MSTATE_MOVE_OUTSIDE_BSP) == MSTATE_MOVE_OUTSIDE_BSP);
+
+   // but must not give these back in piState
+   *Flags &= ~MSTATE_MOVE_OUTSIDE_BSP;
+   
+   V2 se, stepend;
+   V2SUB(&se, E, S);
+
+   // get length from start to end
+   float len = V2LEN(&se);
+
+   // trying to step to old location?
+   if (ISZERO(len))
+   {
+      // set step destination to end
+      *P = *E;
+      *Flags &= ~ESTATE_AVOIDING;
+      *Flags &= ~ESTATE_CLOCKWISE;
+      return true;
+   }
+
+   // this first normalizes the se vector,
+   // then scales to a length of 16 kod-fineunits (=256  roo-fineunits)
+   float scale = (1.0f / len) * FINENESSKODTOROO(16.0f);
+
+   // apply the scale on se
+   V2SCALE(&se, scale);
+
+   /****************************************************/
+   // 1) try direct step towards destination first
+   /****************************************************/
+
+   // note: we must verify the location the object is actually going to end up in KOD,
+   // this means we must round to the next closer kod-fineness value,  
+   // so these values are also exactly expressable in kod coordinates.
+   // in fact this makes the vector a variable length between ~15.5 and ~16.5 fine units
+   V2ADD(&stepend, S, &se);
+   stepend.X = ROUNDROOTOKODFINENESS(stepend.X);
+   stepend.Y = ROUNDROOTOKODFINENESS(stepend.Y);
+   if (BSPCanMoveInRoom(Room, S, &stepend, ObjectID, moveOutsideBSP))
+   {
+      *P = stepend;
+      *Flags &= ~ESTATE_AVOIDING;
+      *Flags &= ~ESTATE_CLOCKWISE;
+      return true;
+   }
+   
+   /****************************************************/
+   // 2) can't do direct step
+   /****************************************************/
+
+   bool isAvoiding = ((*Flags & ESTATE_AVOIDING) == ESTATE_AVOIDING);
+   bool isRight = ((*Flags & ESTATE_CLOCKWISE) == ESTATE_CLOCKWISE);
+
+   // not yet in clockwise or cclockwise mode
+   // randomly pick one of them
+   if (!isAvoiding)
+      isRight = (rand() % 2 == 1);
+
+   // must run this possibly twice
+   // e.g. left after right failed or right after left failed
+   for (int i = 0; i < 2; i++)
+   {
+      if (isRight)
+      {
+         V2 v = se;
+
+		 // try 22.5° right
+		 V2ROTATE(&v, 0.5f * (float)-M_PI_4);
+		 V2ADD(&stepend, S, &v);
+         stepend.X = ROUNDROOTOKODFINENESS(stepend.X);
+         stepend.Y = ROUNDROOTOKODFINENESS(stepend.Y);
+         if (BSPCanMoveInRoom(Room, S, &stepend, ObjectID, moveOutsideBSP))
+		 {
+            *P = stepend;
+            *Flags |= ESTATE_AVOIDING;
+            *Flags |= ESTATE_CLOCKWISE;
+            return true;
+         }
+
+         // try 45° right
+         V2ROTATE(&v, 0.5f * (float)-M_PI_4);
+         V2ADD(&stepend, S, &v);
+         stepend.X = ROUNDROOTOKODFINENESS(stepend.X);
+         stepend.Y = ROUNDROOTOKODFINENESS(stepend.Y);
+         if (BSPCanMoveInRoom(Room, S, &stepend, ObjectID, moveOutsideBSP))
+         {
+            *P = stepend;
+            *Flags |= ESTATE_AVOIDING;
+            *Flags |= ESTATE_CLOCKWISE;
+            return true;
+         }
+
+         // try 67.5° right
+         V2ROTATE(&v, 0.5f * (float)-M_PI_4);
+         V2ADD(&stepend, S, &v);
+         stepend.X = ROUNDROOTOKODFINENESS(stepend.X);
+         stepend.Y = ROUNDROOTOKODFINENESS(stepend.Y);
+         if (BSPCanMoveInRoom(Room, S, &stepend, ObjectID, moveOutsideBSP))
+         {
+            *P = stepend;
+            *Flags |= ESTATE_AVOIDING;
+            *Flags |= ESTATE_CLOCKWISE;
+            return true;
+		 }
+
+         // try 90° right
+         V2ROTATE(&v, 0.5f * (float)-M_PI_4);
+         V2ADD(&stepend, S, &v);
+         stepend.X = ROUNDROOTOKODFINENESS(stepend.X);
+         stepend.Y = ROUNDROOTOKODFINENESS(stepend.Y);
+         if (BSPCanMoveInRoom(Room, S, &stepend, ObjectID, moveOutsideBSP))
+         {
+            *P = stepend;
+            *Flags |= ESTATE_AVOIDING;
+            *Flags |= ESTATE_CLOCKWISE;
+            return true;
+         }
+
+         // try 112.5° right
+         V2ROTATE(&v, 0.5f * (float)-M_PI_4);
+         V2ADD(&stepend, S, &v);
+         stepend.X = ROUNDROOTOKODFINENESS(stepend.X);
+         stepend.Y = ROUNDROOTOKODFINENESS(stepend.Y);
+         if (BSPCanMoveInRoom(Room, S, &stepend, ObjectID, moveOutsideBSP))
+         {
+            *P = stepend;
+            *Flags |= ESTATE_AVOIDING;
+            *Flags |= ESTATE_CLOCKWISE;
+            return true;
+         }
+
+         // try 135° right
+         V2ROTATE(&v, (float)-M_PI_4);
+         V2ADD(&stepend, S, &v);
+         stepend.X = ROUNDROOTOKODFINENESS(stepend.X);
+         stepend.Y = ROUNDROOTOKODFINENESS(stepend.Y);
+         if (BSPCanMoveInRoom(Room, S, &stepend, ObjectID, moveOutsideBSP))
+         {
+            *P = stepend;
+            *Flags |= ESTATE_AVOIDING;
+            *Flags |= ESTATE_CLOCKWISE;
+            return true;
+         }
+
+         // failed to circumvent by going right, switch to left
+         isRight = false;
+         *Flags |= ESTATE_AVOIDING;
+         *Flags &= ~ESTATE_CLOCKWISE;
+      }
+      else
+      {
+         V2 v = se;
+
+         // try 22.5° left
+         V2ROTATE(&v, 0.5f * (float)M_PI_4);
+         V2ADD(&stepend, S, &v);
+         stepend.X = ROUNDROOTOKODFINENESS(stepend.X);
+         stepend.Y = ROUNDROOTOKODFINENESS(stepend.Y);
+         if (BSPCanMoveInRoom(Room, S, &stepend, ObjectID, moveOutsideBSP))
+         {
+            *P = stepend;
+            *Flags |= ESTATE_AVOIDING;
+            *Flags &= ~ESTATE_CLOCKWISE;
+            return true;
+         }
+
+         // try 45° left
+         V2ROTATE(&v, 0.5f * (float)M_PI_4);
+         V2ADD(&stepend, S, &v);
+         stepend.X = ROUNDROOTOKODFINENESS(stepend.X);
+         stepend.Y = ROUNDROOTOKODFINENESS(stepend.Y);
+         if (BSPCanMoveInRoom(Room, S, &stepend, ObjectID, moveOutsideBSP))
+         {
+            *P = stepend;
+            *Flags |= ESTATE_AVOIDING;
+            *Flags &= ~ESTATE_CLOCKWISE;
+            return true;
+         }
+
+         // try 67.5° left
+         V2ROTATE(&v, 0.5f * (float)M_PI_4);
+         V2ADD(&stepend, S, &v);
+         stepend.X = ROUNDROOTOKODFINENESS(stepend.X);
+         stepend.Y = ROUNDROOTOKODFINENESS(stepend.Y);
+         if (BSPCanMoveInRoom(Room, S, &stepend, ObjectID, moveOutsideBSP))
+         {
+            *P = stepend;
+            *Flags |= ESTATE_AVOIDING;
+            *Flags &= ~ESTATE_CLOCKWISE;
+            return true;
+		 }
+
+         // try 90° left
+         V2ROTATE(&v, 0.5f * (float)M_PI_4);
+         V2ADD(&stepend, S, &v);
+         stepend.X = ROUNDROOTOKODFINENESS(stepend.X);
+         stepend.Y = ROUNDROOTOKODFINENESS(stepend.Y);
+         if (BSPCanMoveInRoom(Room, S, &stepend, ObjectID, moveOutsideBSP))
+         {
+            *P = stepend;
+            *Flags |= ESTATE_AVOIDING;
+            *Flags &= ~ESTATE_CLOCKWISE;
+            return true;
+         }
+
+         // try 112.5° left
+         V2ROTATE(&v, 0.5f * (float)M_PI_4);
+         V2ADD(&stepend, S, &v);
+         stepend.X = ROUNDROOTOKODFINENESS(stepend.X);
+         stepend.Y = ROUNDROOTOKODFINENESS(stepend.Y);
+         if (BSPCanMoveInRoom(Room, S, &stepend, ObjectID, moveOutsideBSP))
+         {
+            *P = stepend;
+            *Flags |= ESTATE_AVOIDING;
+            *Flags &= ~ESTATE_CLOCKWISE;
+            return true;
+         }
+
+         // try 135° left
+         V2ROTATE(&v, 0.5f * (float)M_PI_4);
+         V2ADD(&stepend, S, &v);
+         stepend.X = ROUNDROOTOKODFINENESS(stepend.X);
+         stepend.Y = ROUNDROOTOKODFINENESS(stepend.Y);
+         if (BSPCanMoveInRoom(Room, S, &stepend, ObjectID, moveOutsideBSP))
+         {
+            *P = stepend;
+            *Flags |= ESTATE_AVOIDING;
+            *Flags &= ~ESTATE_CLOCKWISE;
+            return true;
+         }
+
+         // failed to circumvent by going left, switch to right
+         isRight = true;
+         *Flags |= ESTATE_AVOIDING;
+         *Flags |= ESTATE_CLOCKWISE;
+      }
+   }
+
+   /****************************************************/
+   // 3) fully stuck
+   /****************************************************/
+
+   *P = *S;
+   *Flags &= ~ESTATE_AVOIDING;
+   *Flags &= ~ESTATE_CLOCKWISE;
+   return false;
+}
+
+/*********************************************************************************************/
+/* BSPBlockerClear:   Clears all registered blocked locations.                               */
+/*********************************************************************************************/
+void BSPBlockerClear(room_type* Room)
+{
+   Blocker* blocker = Room->Blocker;
+   while (blocker)
+   {
+      Blocker* tmp = blocker->Next;
+      FreeMemory(MALLOC_ID_ROOM, blocker, sizeof(Blocker));
+      blocker = tmp;
+   }
+   Room->Blocker = NULL;
+}
+
+/*********************************************************************************************/
+/* BSPBlockerRemove:  Removes a blocked location.                                            */
+/*********************************************************************************************/
+bool BSPBlockerRemove(room_type* Room, int ObjectID)
+{
+   if (!Room)
+      return false;
+
+   Blocker* blocker = Room->Blocker;
+   Blocker* previous = NULL;
+
+   while (blocker)
+   {
+      if (blocker->ObjectID == ObjectID)
+      {
+         // removing first element
+         if (!previous)
+            Room->Blocker = blocker->Next;
+
+         // removing not first element
+         else
+            previous->Next = blocker->Next;
+
+         // now cleanup node
+         FreeMemory(MALLOC_ID_ROOM, blocker, sizeof(Blocker));
+
+         return true;
+      }
+
+      previous = blocker;
+      blocker = blocker->Next;
+   }
+
+   return false;
+}
+
+/*********************************************************************************************/
+/* BSPBlockerAdd:     Adds a blocked location in the room.                                   */
+/*********************************************************************************************/
+bool BSPBlockerAdd(room_type* Room, int ObjectID, V2* P)
+{
+   if (!Room || !P)
+      return false;
+
+   // alloc
+   Blocker* newblocker = (Blocker*)AllocateMemory(MALLOC_ID_ROOM, sizeof(Blocker));
+
+   // set values on new blocker
+   newblocker->ObjectID = ObjectID;
+   newblocker->Position = *P;
+   newblocker->Next = NULL;
+
+   // first blocker
+   if (!Room->Blocker)
+      Room->Blocker = newblocker;
+
+   else
+   {
+      // we insert at the beginning because it's
+      // (a) faster
+      // (b) it makes sure 'static' objects are at the end (unlikely to be touched again)
+      newblocker->Next = Room->Blocker;
+      Room->Blocker = newblocker;
+   }
+
+   return true;
+}
+
+/*********************************************************************************************/
+/* BSPBlockerMove:    Moves an existing blocked location to somewhere else.                  */
+/*********************************************************************************************/
+bool BSPBlockerMove(room_type* Room, int ObjectID, V2* P)
+{
+   if (!Room || !P)
+      return false;
+
+   Blocker* blocker = Room->Blocker;
+   while (blocker)
+   {
+      if (blocker->ObjectID == ObjectID)
+      {
+         blocker->Position = *P;
+         return true;
+      }
+      blocker = blocker->Next;
+   }
+
+   return false;
+}
+
+/*********************************************************************************************/
+/* BSPRooFileLoadServer:  Fill "room" with server-relevant data from given roo file.         */
+/*********************************************************************************************/
+bool BSPLoadRoom(char *fname, room_type *room)
 {
    int i, j, temp;
    unsigned char byte;
    unsigned short unsigshort;
-   int offset_client, offset_tree, offset_walls, offset_sides, offset_sectors;
-   int offset_server;
+   int offset_client, offset_tree, offset_walls, offset_sides, offset_sectors, offset_things;
    char tmpbuf[128];
 
    FILE *infile = fopen(fname, "rb");
@@ -535,8 +1350,8 @@ Bool BSPRooFileLoadServer(char *fname, room_type *room)
    if (fread(&offset_client, 1, 4, infile) != 4)
    { fclose(infile); return False; }
 
-   // read pointer to server info
-   if (fread(&offset_server, 1, 4, infile) != 4)
+   // skip pointer to server info
+   if (fread(&temp, 1, 4, infile) != 4)
    { fclose(infile); return False; }
 
    /****************************************************************************/
@@ -570,6 +1385,10 @@ Bool BSPRooFileLoadServer(char *fname, room_type *room)
 
    // read pointer to sectors
    if (fread(&offset_sectors, 1, 4, infile) != 4)
+   { fclose(infile); return False; }
+
+   // read pointer to things
+   if (fread(&offset_things, 1, 4, infile) != 4)
    { fclose(infile); return False; }
 
    /************************ BSP-TREE ****************************************/
@@ -875,6 +1694,65 @@ Bool BSPRooFileLoadServer(char *fname, room_type *room)
          sector->SlopeInfoCeiling = NULL;
    }
 
+   /***************************** THINGS ****************************************/
+   
+   fseek(infile, offset_things, SEEK_SET);
+
+   // count of things
+   if (fread(&unsigshort, 1, 2, infile) != 2)
+   { fclose(infile); return False; }
+
+   // must have exactly two things describing bbox (each thing a vertex)
+   if (unsigshort != 2)
+   { fclose(infile); return False; }
+
+   // note: Things vertices are stored as INT in (1:64) fineness, based on the
+   // coordinate-system origin AS SHOWN IN ROOMEDIT (Y-UP).
+   // Also these can be ANY variant of the 2 possible sets describing
+   // a diagonal in a rectangle, so not guaranteed to be ordered like min/or max first.
+   float x0, x1, y0, y1;
+
+   if (fread(&temp, 1, 4, infile) != 4)
+   { fclose(infile); return False; }
+   x0 = (float)temp;
+   if (fread(&temp, 1, 4, infile) != 4)
+   { fclose(infile); return False; }
+   y0 = (float)temp;
+   if (fread(&temp, 1, 4, infile) != 4)
+   { fclose(infile); return False; }
+   x1 = (float)temp;
+   if (fread(&temp, 1, 4, infile) != 4)
+   { fclose(infile); return False; }
+   y1 = (float)temp;
+   
+   // from the 4 bbox points shown in roomedit (defined by 2 vertices)
+   // 1) Pick the left-bottom one as minimum (and scale to ROO fineness)
+   // 2) Pick the right-up one as maximum (and scale to ROO fineness)
+   room->ThingsBox.Min.X = FINENESSKODTOROO(fmin(x0, x1));
+   room->ThingsBox.Min.Y = FINENESSKODTOROO(fmin(y0, y1));
+   room->ThingsBox.Max.X = FINENESSKODTOROO(fmax(x0, x1));
+   room->ThingsBox.Max.Y = FINENESSKODTOROO(fmax(y0, y1));
+
+   // when roomedit saves the ROO, it translates the origin (0/0)
+   // into one boundingbox point, so that origin in ROO (0/0)
+   // later is roughly equal to (row=1 col=1)
+   
+   // translate box so minimum is at (0/0)
+   room->ThingsBox.Max.X = room->ThingsBox.Max.X - room->ThingsBox.Min.X;
+   room->ThingsBox.Max.Y = room->ThingsBox.Max.Y - room->ThingsBox.Min.Y;
+   room->ThingsBox.Min.X = 0.0f;
+   room->ThingsBox.Min.Y = 0.0f;
+
+   // calculate the old cols/rows values rather than loading them
+   room->cols = (int)(room->ThingsBox.Max.X / 1024.0f);
+   room->rows = (int)(room->ThingsBox.Max.Y / 1024.0f);
+   room->colshighres = (int)(room->ThingsBox.Max.X / 256.0f);
+   room->rowshighres = (int)(room->ThingsBox.Max.Y / 256.0f);
+
+   /************************** DONE READNG **********************************/
+
+   fclose(infile);
+
    /*************************************************************************/
    /*                      RESOLVE NUMS TO POINTERS                         */
    /*************************************************************************/
@@ -989,98 +1867,18 @@ Bool BSPRooFileLoadServer(char *fname, room_type *room)
    }
 
    /****************************************************************************/
-   /*                               SERVER GRIDS                               */
    /****************************************************************************/
-   
-   fseek(infile, offset_server, SEEK_SET);
 
-   // Read size of room
-   if (fread(&room->rows, 1, 4, infile) != 4)
-   { fclose(infile); return False; }
-   if (fread(&room->cols, 1, 4, infile) != 4)
-   { fclose(infile); return False; }
-
-   // Allocate and read movement grid
-   room->grid = (unsigned char **)AllocateMemory(MALLOC_ID_ROOM,room->rows * sizeof(char *));
-   for (i=0; i < room->rows; i++)
-   {
-      room->grid[i] = (unsigned char *)AllocateMemory(MALLOC_ID_ROOM,room->cols);
-      if (fread(room->grid[i], 1, room->cols, infile) != room->cols)
-      {
-         for (j=0; j <= i; j++)
-            FreeMemory(MALLOC_ID_ROOM,room->grid[i],room->cols);
-         FreeMemory(MALLOC_ID_ROOM,room->grid,room->rows * sizeof(char *));
-
-         fclose(infile);
-         return False;
-      }
-   }
-
-   // Allocate and read flag grid
-   room->flags = (unsigned char **)AllocateMemory(MALLOC_ID_ROOM,room->rows * sizeof(char *));
-   for (i=0; i < room->rows; i++)
-   {
-      room->flags[i] = (unsigned char *)AllocateMemory(MALLOC_ID_ROOM,room->cols);
-      if (fread(room->flags[i], 1, room->cols, infile) != room->cols)
-      {
-         for (j=0; j <= i; j++)
-            FreeMemory(MALLOC_ID_ROOM,room->flags[i],room->cols);
-         FreeMemory(MALLOC_ID_ROOM,room->flags,room->rows * sizeof(char *));
-
-         fclose(infile);
-         return False;
-      }
-   }
-
-   // Allocate and read monster movement grid
-   room->monster_grid = (unsigned char **)AllocateMemory(MALLOC_ID_ROOM,room->rows * sizeof(char *));
-   for (i=0; i < room->rows; i++)
-   {
-      room->monster_grid[i] = (unsigned char *)AllocateMemory(MALLOC_ID_ROOM,room->cols);
-      if (fread(room->monster_grid[i], 1, room->cols, infile) != room->cols)
-      {
-         for (j=0; j <= i; j++)
-            FreeMemory(MALLOC_ID_ROOM,room->monster_grid[i],room->cols);
-         FreeMemory(MALLOC_ID_ROOM,room->monster_grid,room->rows * sizeof(char *));
-			   
-         fclose(infile);
-         return False;
-      }
-   }
-
-   // Read highres gridsize
-   if (fread(&room->rowshighres, 1, 4, infile) != 4)
-   { fclose(infile); return False; }
-
-   if (fread(&room->colshighres, 1, 4, infile) != 4)
-   { fclose(infile); return False; }
-
-   // Allocate and read highres grid
-   room->highres_grid = (unsigned int **)AllocateMemory(MALLOC_ID_ROOM,room->rowshighres * sizeof(int *));
-   for (i=0; i < room->rowshighres; i++)
-   {
-      room->highres_grid[i] = (unsigned int *)AllocateMemory(MALLOC_ID_ROOM,room->colshighres * sizeof(int));
-      if (fread(room->highres_grid[i], 1, room->colshighres * sizeof(int), infile) != room->colshighres * sizeof(int))
-      {
-         for (j=0; j <= i; j++)
-            FreeMemory(MALLOC_ID_ROOM,room->highres_grid[i],room->colshighres * sizeof(int));
-         FreeMemory(MALLOC_ID_ROOM,room->highres_grid,room->rowshighres * sizeof(int *));
-			   
-         fclose(infile);
-         return False;
-      }
-   }	   
-
-   fclose(infile);
+   // no initial blockers
+   room->Blocker = NULL;
 
    return True;
 }
 
 /*********************************************************************************************/
-/*
- * BSPRoomFreeServer:  Free the parts of a room structure used by the server.
- */
-void BSPRoomFreeServer(room_type *room)
+/* BSPRoomFreeServer:  Free the parts of a room structure used by the server.                */
+/*********************************************************************************************/
+void BSPFreeRoom(room_type *room)
 {
    int i;
 
@@ -1119,38 +1917,17 @@ void BSPRoomFreeServer(room_type *room)
    room->SidesCount = 0;
    room->SectorsCount = 0;
 
+   BSPBlockerClear(room);
+
    /****************************************************************************/
    /*                               SERVER PARTS                               */
    /****************************************************************************/
-
-   // free lowres movement grid
-   for (i=0; i < room->rows; i++)
-      FreeMemory(MALLOC_ID_ROOM,room->grid[i],room->cols);
-   FreeMemory(MALLOC_ID_ROOM,room->grid,room->rows * sizeof(char *));
-   
-   // free lowres flags grid
-   for (i=0; i < room->rows; i++)
-      FreeMemory(MALLOC_ID_ROOM,room->flags[i],room->cols);
-   FreeMemory(MALLOC_ID_ROOM,room->flags,room->rows * sizeof(char *));
-
-   // free lowres monster grid
-   for (i=0; i < room->rows; i++)
-      FreeMemory(MALLOC_ID_ROOM,room->monster_grid[i],room->cols);
-   FreeMemory(MALLOC_ID_ROOM,room->monster_grid,room->rows * sizeof(char *));
-
-   // free highres grid
-   for (i=0; i < room->rowshighres; i++)
-      FreeMemory(MALLOC_ID_ROOM,room->highres_grid[i],room->colshighres * sizeof(int));
-   FreeMemory(MALLOC_ID_ROOM,room->highres_grid,room->rowshighres * sizeof(int *));
-   
-   room->grid = NULL;
-   room->flags = NULL;
-   room->monster_grid = NULL;
-   room->highres_grid = NULL;
+  
    room->rows = 0;
    room->cols = 0;
    room->rowshighres = 0;
    room->colshighres = 0;
    room->resource_id = 0;
+   room->roomdata_id = 0;
 }
-
+#pragma endregion

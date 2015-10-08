@@ -41,6 +41,7 @@ static Bool HandleGuildShields(char *ptr, long len);
 static Bool HandleLookPlayer(char *ptr, long len);
 static Bool HandleSendQuit(char *ptr, long len);
 static Bool HandleSpellSchools(char *ptr, long len);
+static Bool HandlePreferences(char *ptr, long len);
 static void CustomConfigInit(void);
 
 // Server message handler table
@@ -81,6 +82,7 @@ static handler_struct user_handler_table[] = {
 { UC_LOOK_PLAYER,          HandleLookPlayer, },
 { UC_SEND_QUIT,            HandleSendQuit, },
 { UC_SPELL_SCHOOLS,        HandleSpellSchools, },
+{ UC_RECEIVE_PREFERENCES,  HandlePreferences, },
 { 0, NULL},
 };
 
@@ -89,13 +91,8 @@ client_message user_msg_table[] = {
 { UC_REST,                 { PARAM_END }, },
 { UC_STAND,                { PARAM_END }, },
 { UC_SUICIDE,              { PARAM_END }, },
-{ UC_SAFETY,               { PARAM_BYTE, PARAM_END }, },
-{ UC_TEMPSAFE,             { PARAM_BYTE, PARAM_END }, },
-{ UC_GROUPING,             { PARAM_BYTE, PARAM_END }, },
-{ UC_AUTOLOOT,             { PARAM_BYTE, PARAM_END }, },
-{ UC_AUTOCOMBINE,          { PARAM_BYTE, PARAM_END }, },
-{ UC_REAGENTBAG,           { PARAM_BYTE, PARAM_END }, },
-{ UC_SPELLPOWER,           { PARAM_BYTE, PARAM_END }, },
+{ UC_REQ_PREFERENCES,      { PARAM_END }, },
+{ UC_SEND_PREFERENCES,     { PARAM_INT, PARAM_END  }, },
 { UC_REQ_GUILDINFO,        { PARAM_END }, },
 { UC_INVITE,               { PARAM_ID, PARAM_END }, },
 { UC_EXILE,                { PARAM_ID, PARAM_END }, },
@@ -123,6 +120,7 @@ client_message user_msg_table[] = {
 { UC_DEPOSIT,              { PARAM_INT, PARAM_END }, },
 { UC_BALANCE,              { PARAM_END }, },
 { UC_APPEAL,               { PARAM_STRING, PARAM_END }, },
+{ UC_REQ_TIME,              { PARAM_END }, },
 { 0,                       { PARAM_END, }, },    // Must end table this way
 };
 
@@ -425,6 +423,8 @@ static TypedCommand commands[] = {
 { "spellpower an",      CommandSpellPowerOn, },
 { "spellpower off",     CommandSpellPowerOff, },
 { "spellpower aus",     CommandSpellPowerOff, },
+{ "time",               CommandTime, },
+{ "Zeit",               CommandTime, },
 { NULL,          NULL},    // Must end table this way
 };
 
@@ -1598,6 +1598,22 @@ Bool HandleSpellSchools(char *ptr, long len)
      Extract(&ptr, &schools[i], SIZE_ID);
 
   SpellsGotSchools(num, schools);
+
+  len -= (ptr - start);
+  if (len != 0)
+    return False;
+  
+  return True;
+}
+/********************************************************************/
+Bool HandlePreferences(char *ptr, long len)
+{
+  int preferences;
+  char *start = ptr;
+
+  Extract(&ptr, &preferences, 4);
+
+  SetPlayerPreferences(preferences);
 
   len -= (ptr - start);
   if (len != 0)
