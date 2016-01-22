@@ -440,11 +440,6 @@ properties:
    pbIllusion = FALSE
    vbSummoned = FALSE
 
-   % Evil twin objects
-   poEvilTwin = $
-   poEvilTwinOriginal = $
-   poEvilTwinCaster = $
-   
    % Apparition object (caster)
    poApparitionCaster = $
 
@@ -716,23 +711,6 @@ messages:
 
       % Clear reagent return list.
       plSpellList = $;
-
-      % If this monster is an 'Evil Twin', tell the original it was deleted.
-      if poEvilTwinOriginal <> $
-      {
-         Send(poEvilTwinOriginal,@RemoveEvilTwin);
-         poEvilTwinOriginal = $;
-
-         % Tell the caster it was deleted too.
-         Send(poEvilTwinCaster,@RemoveCreatedEvilTwin,#what=self);
-         poEvilTwinCaster = $;
-      }
-
-      % If this monster has an Evil Twin, delete it too.
-      if poEvilTwin <> $
-      {
-         Post(poEvilTwin,@Delete);
-      }
 
       % If this monster is an Apparition, tell the original it was deleted.
       if poApparitionOriginal <> $
@@ -1770,13 +1748,14 @@ messages:
 
    %%%  Auxiliary Routines
 
-   DoRandomWalk()
+   DoRandomWalk(override=FALSE)
    {
       local iNew_row, iNew_col, iNew_finerow, iNew_finecol;
 
       % The bigger/tougher I am, the less likely I'm interested in milling
       %  around.
       if Random(1,140) < piHit_points/100
+         AND NOT override
       {
          return;
       }
@@ -2776,9 +2755,10 @@ messages:
       return ((viAttributes & MOB_RECEIVE) AND TRUE);
    }
 
-   CanAcceptOffer()
+   CanAcceptOffer(who=$)
    {
-      return ((viAttributes & MOB_BUYER) OR (viAttributes & MOB_RECEIVE));
+      return ((viAttributes & MOB_BUYER OR viAttributes & MOB_RECEIVE)
+               OR (who <> $ AND IsClass(who,&DM)));
    }
 
    ReqOffer(what = $, item_list = $)
@@ -2901,6 +2881,12 @@ messages:
             return FALSE;
          }
 
+         return TRUE;
+      }
+
+      % Let DMs give monsters stuff - will drop on death.
+      if IsClass(what,&DM)
+      {
          return TRUE;
       }
 
@@ -3569,8 +3555,6 @@ messages:
 
    KilledSomething(what=$,use_weapon=$)
    {
-      local oIllusionCaster;
-
       if what = $
       {
          Debug("Bad info in killedsomething().");
@@ -3605,28 +3589,16 @@ messages:
                      #use_weapon=use_weapon);
       }
 
-      % If this is a monster evil twin, and it has no master,
-      % the caster of the evil twin acts as the master for
+      % If this is an apparition, and it has no master,
+      % the caster of the apparition acts as the master for
       % tracking the results of monster kills, but not any
       % accidental player kills (or player minion kills).
-      % Handle apparitions the same way.
-      oIllusionCaster = $;
-
       if poApparitionCaster <> $
-      {
-         oIllusionCaster = poApparitionCaster;
-      }
-      if poEvilTwinCaster <> $
-      {
-         oIllusionCaster = poEvilTwinCaster;
-      }
-
-      if oIllusionCaster <> $
          AND IsClass(what,&Monster)
          AND (Send(what,@GetMaster) = $
             OR IsClass(Send(what,@GetMaster),&Monster))
       {
-         return Send(oIllusionCaster,@KilledSomething,#what=what,
+         return Send(poApparitionCaster,@KilledSomething,#what=what,
                      #use_weapon=use_weapon);
       }
 
@@ -3876,29 +3848,36 @@ messages:
    Offer(what = $,item_list = $)
    "Offer the player money in exchange for their goods - MOB_BUYER"
    {
-      local i,iValue_offered,iAdd,x,y;
+      local i, iValue_offered, iAdd, x, y;
 
       % The Faction Pricing bonus was selling items to NPCs at higher prices
-      %  than the new price.  This has been taken out.
+      % than the new price.  This has been taken out.
 
-      iValue_offered = 0;
-      foreach i in item_list
+      if (viAttributes & MOB_BUYER
+         OR viAttributes & MOB_RECEIVE)
       {
-         x = Send(i,@GetValue) * (100 - 10*viMerchant_markup) / 100;
-         iAdd = Bound(x,1,$);
+         iValue_offered = 0;
+         foreach i in item_list
+         {
+            x = Send(i,@GetValue) * (100 - 10*viMerchant_markup) / 100;
+            iAdd = Bound(x,1,$);
 
-         iValue_offered = iValue_offered + iAdd;
+            iValue_offered = iValue_offered + iAdd;
+         }
+
+         poCustomer = what;
+
+         plOffer_items = [ Create(&Money,#number=iValue_offered) ];
+         Send(what,@CounterOffer,#item_list=plOffer_items);
+         ptCancelOffer = CreateTimer(self,@CancelOfferTimer,viCancel_offer_time);
       }
-
-      poCustomer = what;
-
-      plOffer_items = [ Create(&Money,#number=iValue_offered) ];
-      Send(what,@CounterOffer,#item_list=plOffer_items);
-      ptCancelOffer = CreateTimer(self,@CancelOfferTimer,viCancel_offer_time);
+      else if IsClass(what,&DM)
+      {
+         Send(what,@CounterOffer,#item_list=$);
+      }
 
       return;
    }
-
 
    CancelOfferTimer()
    {
@@ -4099,8 +4078,9 @@ messages:
       }
 
       iFee = 0;
-      iBulk=0;
+      iBulk = 0;
       iCount = 0;
+      bFound = FALSE;
 
       % Make sure the player really has this item in storage.
       foreach i in lItems
@@ -4496,7 +4476,7 @@ messages:
    "Handle things having to do with mobs who have stuff to sell. "
    "This is used for both teachers and sellers"
    {
-      local i, j, bFound, oBuy, oMoney, iPrice, lNumbers,
+      local i, j, bFound, oBuy, oMoney, iPrice, iPriceOne, lNumbers,
             iAmount, oItemAtt, iCan_hold, oSplit; 
 
       % Ensure that buyer and seller are in the same room
@@ -4537,7 +4517,10 @@ messages:
          oMoney = Send(what,@GetMoneyObject);
 
          % Get the price for that amount
-         iPrice = Send(self,@GetPrice,#what=i,#who=what); 
+         iPriceOne = Send(self,@GetPrice,#what=i,#who=what);
+
+         % Init iPrice to the cost of one item.
+         iPrice = iPriceOne;
 
          if IsClass(i,&Item)
          {
@@ -4570,8 +4553,11 @@ messages:
                   iAmount = Bound(iAmount,1,MAX_BUY_AMOUNT);
                }
 
+               % Make sure cost for 1 item is at least one gold coin.
+               iPriceOne = Bound(iPriceOne, 1, $);
+
                % Now figure price
-               iPrice = iPrice * iAmount;
+               iPrice = iPriceOne * iAmount;
 
                % Make sure we have a price of at least one gold coin
                iPrice = Bound(iPrice, 1, $);
@@ -4686,8 +4672,7 @@ messages:
                      if Send(oBuy,@ReqNewOwner,#what=oSplit)
                      {
                         Send(oMoney,@SubtractNumber,
-                              #number=Send(self,@GetPrice,#what=oBuy,#who=what)*
-                                           Send(oSplit,@GetNumber));
+                              #number=iPriceOne * Send(oSplit,@GetNumber));
                         Send(i,@SubtractNumber,#Number=Send(oSplit,@GetNumber));
                         Send(what,@NewHold,#what=oSplit);
                         Post(poOwner,@SomeoneSaid,#what=self,
@@ -6326,7 +6311,7 @@ messages:
       return pbDontDispose;
    }
 
-   GetObjectFlags()
+   GetObjectFlags(what=$)
    {
       local iFlags;
 
@@ -6342,8 +6327,9 @@ messages:
          iFlags = iFlags | OF_BUYABLE;
       }
 
-      if (viAttributes & MOB_BUYER)
-         OR (viAttributes & MOB_RECEIVE)
+      if ((viAttributes & MOB_BUYER
+         OR viAttributes & MOB_RECEIVE)
+         OR what <> $ AND IsClass(what,&DM))
       {
          iFlags = iFlags | OF_OFFERABLE;
       }
@@ -6398,15 +6384,6 @@ messages:
       return TRUE;
    }
 
-   % If this monster is an Evil Twin, this keeps track of the original target.
-   EvilTwinOrignial(what=$,who=$)
-   {
-      poEvilTwinOriginal = what;
-      poEvilTwinCaster = who;
-
-      return;
-   }
-
    ApparitionCaster(who=$)
    "If this monster is an apparition, keep track of the caster."
    {
@@ -6416,7 +6393,7 @@ messages:
    }
 
    IsOwnedByPlayer()
-   "Checks the three cases of minions, and returns TRUE if owned by "
+   "Checks the two cases of minions, and returns TRUE if owned by "
    "a player, FALSE if not. If minion has a monster for a master, "
    "IsOwnedByPlayer is called on the master."
    {
@@ -6441,7 +6418,7 @@ messages:
 
       if poApparitionCaster <> $
       {
-         if IsClass(poApparitionCaster,&Player)
+         if IsClass(poApparitionCaster,&User)
          {
             return TRUE;
          }
@@ -6449,21 +6426,6 @@ messages:
          if IsClass(poApparitionCaster,&Monster)
          {
             return Send(poApparitionCaster,@IsOwnedByPlayer);
-         }
-
-         return FALSE;
-      }
-      
-      if poEvilTwinCaster <> $
-      {
-         if IsClass(poEvilTwinCaster,&Player)
-         {
-            return TRUE;
-         }
-
-         if IsClass(poEvilTwinCaster,&Monster)
-         {
-            return Send(poEvilTwinCaster,@IsOwnedByPlayer);
          }
 
          return FALSE;
@@ -6478,7 +6440,6 @@ messages:
    {
       if poMaster <> $
          OR poApparitionCaster <> $
-         OR poEvilTwinCaster <> $
       {
          return TRUE;
       }
@@ -6508,7 +6469,6 @@ messages:
       {
          return;
       }
-
 
       foreach oActive in plControlledMinions
       {

@@ -98,7 +98,10 @@ void AdminShowMemory(int session_id,admin_parm_type parms[],
 void AdminShowCalled(int session_id,admin_parm_type parms[],
                      int num_blak_parm,parm_node blak_parm[]);
 void AdminShowCalledClass(class_node *c);
-
+void AdminShowRoomTable(int session_id, admin_parm_type parms[],
+                        int num_blak_parm, parm_node blak_parm[]);
+void AdminShowBlockers(int session_id,admin_parm_type parms[],
+                       int num_blak_parm,parm_node blak_parm[]);
 void AdminShowObject(int session_id,admin_parm_type parms[],
                      int num_blak_parm,parm_node blak_parm[]);
 void AdminShowObjects(int session_id,admin_parm_type parms[],
@@ -107,7 +110,7 @@ void AdminShowListNode(int session_id,admin_parm_type parms[],
                        int num_blak_parm,parm_node blak_parm[]);
 void AdminShowList(int session_id,admin_parm_type parms[],
                    int num_blak_parm,parm_node blak_parm[]);
-void AdminShowListParen(int session_id,int list_id,int new_start);
+void AdminShowListParen(int session_id, int list_id);
 void AdminShowUsers(int session_id,admin_parm_type parms[],
                     int num_blak_parm,parm_node blak_parm[]);
 void AdminShowUser(int session_id,admin_parm_type parms[],
@@ -122,6 +125,7 @@ void AdminShowAccount(int session_id,admin_parm_type parms[],
                       int num_blak_parm,parm_node blak_parm[]);
 void AdminShowAccountHeader(void);
 void AdminShowOneAccount(account_node *a);
+void AdminShowOneAccountIfSuspended(account_node *a);
 void AdminDeleteUnusedAccounts(int session_id, admin_parm_type parms[],
                                int num_blak_parm, parm_node blak_parm[]);
 void AdminShowResource(int session_id,admin_parm_type parms[],
@@ -138,9 +142,12 @@ void AdminShowTime(int session_id,admin_parm_type parms[],
 void AdminShowOneTimer(timer_node *t);
 void AdminShowConfiguration(int session_id,admin_parm_type parms[],
                             int num_blak_parm,parm_node blak_parm[]);
-void AdminShowOneConfigNode(config_node *c,const char *config_name,const char *default_str);
+void AdminShowOneConfigNode(config_node *c, const char *config_name,
+                            const char *default_str);
 void AdminShowString(int session_id,admin_parm_type parms[],
                      int num_blak_parm,parm_node blak_parm[]);
+void AdminShowSuspended(int session_id, admin_parm_type parms[],
+                        int num_blak_parm, parm_node blak_parm[]);
 void AdminShowSysTimers(int session_id,admin_parm_type parms[],
                         int num_blak_parm,parm_node blak_parm[]);
 void AdminShowEachSysTimer(systimer_node *st);
@@ -228,6 +235,8 @@ void AdminCreateObject(int session_id,admin_parm_type parms[],
                        int num_blak_parm,parm_node blak_parm[]);
 void AdminCreateListNode(int session_id,admin_parm_type parms[],
                          int num_blak_parm,parm_node blak_parm[]);
+void AdminCreateTable(int session_id, admin_parm_type parms[],
+                      int num_blak_parm, parm_node blak_parm[]);
 void AdminCreateTimer(int session_id,admin_parm_type parms[],
                       int num_blak_parm,parm_node blak_parm[]);
 void AdminCreateResource(int session_id,admin_parm_type parms[],
@@ -244,6 +253,8 @@ void AdminSendInt(int session_id, admin_parm_type parms[],
                   int num_blak_parm, parm_node blak_parm[]);
 void AdminSendObject(int session_id,admin_parm_type parms[],
                      int num_blak_parm,parm_node blak_parm[]);
+void AdminSendList(int session_id, admin_parm_type parms[],
+                   int num_blak_parm, parm_node blak_parm[]);
 void AdminSendUsers(int session_id,admin_parm_type parms[],
                      int num_blak_parm,parm_node blak_parm[]);
 void AdminSendClass(int session_id,admin_parm_type parms[],
@@ -309,44 +320,41 @@ void AdminMark(int session_id,admin_parm_type parms[],
 
 admin_table_type admin_show_table[] =
 {
-	{ AdminShowAccount,       {R,N}, F, A|M, NULL, 0, "account", 
-	"Show one account by account id or name" },
+	{ AdminShowAccount,       {R,N}, F, A|M, NULL, 0, "account",       "Show one account by account id or name" },
 	{ AdminShowAccounts,      {N},   F, A|M, NULL, 0, "accounts",      "Show all accounts" },
-	{ AdminShowObjects,       {I,N}, F, A|M, NULL, 0, "belong",       "Show objects belonging to id" },
-	{ AdminShowCalled,        {I,N}, F, A|M, NULL, 0, "called",
-     "Show top (int) called messages" },
+	{ AdminShowObjects,       {I,N}, F, A|M, NULL, 0, "belong",        "Show objects belonging to id" },
+	{ AdminShowBlockers,      {I,N}, F, A|M, NULL, 0, "blockers",      "Show all blockers in a room (TAG_ROOM_DATA parameter)" },
+	{ AdminShowCalled,        {I,N}, F, A|M, NULL, 0, "called",        "Show top (int) called messages" },
 	{ AdminShowCalls,         {I,N}, F, A|M, NULL, 0, "calls",         "Show top (int) C call counts" },
 	{ AdminShowClass,         {S,N}, F,A|M, NULL, 0, "class",          "Show info about class" },
-	{ AdminShowTime,          {N},   F, A|M, NULL, 0, "clock",        "Show current server time" },
-	{ AdminShowConfiguration, {N},   F, A|M, NULL, 0, "configuration", "Show configuration values" },
+	{ AdminShowTime,          {N},   F, A|M, NULL, 0, "clock",         "Show current server time" },
+	{ AdminShowConfiguration, {N},   F, A|M, NULL, 0, "config",        "Show configuration values" },
 	{ AdminShowConstant,      {S,N}, F,A|M, NULL, 0, "constant",       "Show value of admin constant" },
 	{ AdminShowDynamicResources,{N}, F, A|M, NULL, 0, "dynamic",       "Show all dynamic resources" },
 	{ AdminShowInstances,     {S,N}, F, A|M, NULL, 0, "instances",     "Show all instances of class" },
 	{ AdminShowList,          {I,N}, F, A|M, NULL, 0, "list",          "Traverse & show a list" },
 	{ AdminShowListNode,      {I,N}, F, A|M, NULL, 0, "listnode",      "Show one list node by id" },
-	{ AdminShowMatches,       {S,S,S,S,S,N}, F, A|M, NULL, 0, "matches",     "Show all instances of class which match criteria" },
+	{ AdminShowMatches,       {S,S,S,S,S,N}, F, A|M, NULL, 0, "matches", "Show all instances of class which match criteria" },
 	{ AdminShowMemory,        {N},   F, A|M, NULL, 0, "memory",        "Show system memory use" },
-	{ AdminShowMessage,       {S,S,N},F,A|M, NULL, 0, "message",       
-	"Show info about class & message" },
+	{ AdminShowMessage,       {S,S,N},F,A|M, NULL, 0, "message",       "Show info about class & message" },
 	{ AdminShowName,          {R,N}, F, A|M, NULL, 0, "name",          "Show object of user name" },
-   { AdminShowNameIDs,       {N},   F, A|M, NULL, 0, "nameids",       "Show all name ids (message/parms)" },
+	{ AdminShowNameIDs,       {N},   F, A|M, NULL, 0, "nameids",       "Show all name ids (message/parms)" },
 	{ AdminShowObject,        {I,N}, F, A|M, NULL, 0, "object",        "Show one object by id" },
-	{ AdminShowPackages,      {N},   F,A, NULL, 0, "packages",       "Show all packages loaded" },
+	{ AdminShowPackages,      {N},   F,A, NULL, 0, "packages",         "Show all packages loaded" },
 	{ AdminShowProtocol,      {N},   F, A|M, NULL, 0, "protocol",      "Show protocol message counts" },
-	{ AdminShowReferences,    {S,S,N}, F, A|M, NULL, 0, "references",  
-	"Show what objects or lists reference a particular data value" },
-	{ AdminShowResource,      {S,N}, F, A|M, NULL, 0, "resource",      
-	"Show a resource by resource name" },
+	{ AdminShowReferences,    {S,S,N}, F, A|M, NULL, 0, "references",  "Show what objects or lists reference a particular data value" },
+	{ AdminShowResource,      {S,N}, F, A|M, NULL, 0, "resource",      "Show a resource by resource name" },
+	{ AdminShowRoomTable,     {N},   F, A|M, NULL, 0, "roomtable",     "Show the rooms table" },
 	{ AdminShowStatus,        {N},   F, A|M, NULL, 0, "status",        "Show system status" },
 	{ AdminShowString,        {I,N}, F, A|M, NULL, 0, "string",        "Show one string by string id" },
+	{ AdminShowSuspended,     {N},   F, A|M, NULL, 0, "suspended",     "Show all suspended accounts" },
 	{ AdminShowSysTimers,     {N},   F, A|M, NULL, 0, "systimers",     "Show system timers" },
-   { AdminShowTable,         {I,N}, F, A|M, NULL, 0, "hashtable",     "Show a hash table" },
+	{ AdminShowTable,         {I,N}, F, A|M, NULL, 0, "hashtable",     "Show a hash table" },
 	{ AdminShowTable,         {I,N}, F, A|M, NULL, 0, "table",         "Show a hash table" },
-	{ AdminShowTimer,         {I},   F, A|M, NULL, 0, "timer",        "Show one timer by id" },
+	{ AdminShowTimer,         {I},   F, A|M, NULL, 0, "timer",         "Show one timer by id" },
 	{ AdminShowTimers,        {N},   F, A|M, NULL, 0, "timers",        "Show all timers" },
-	{ AdminShowTransmitted,   {N},   F,A, NULL, 0, "transmitted",
-	"Show # of bytes transmitted in last minute" },
-	{ AdminShowUsage,         {N},   F,A|M,NULL, 0, "usage",         "Show current usage" },
+	{ AdminShowTransmitted,   {N},   F,A, NULL, 0, "transmitted",      "Show # of bytes transmitted in last minute" },
+	{ AdminShowUsage,         {N},   F,A|M,NULL, 0, "usage",           "Show current usage" },
 	{ AdminShowUser,          {R,N}, F, A|M, NULL, 0, "user",          "Show one user by name or object id" },
 	{ AdminShowUsers,         {N},   F, A|M, NULL, 0, "users",         "Show all users" },
 };
@@ -421,6 +429,7 @@ admin_table_type admin_create_table[] =
 	{ AdminCreateListNode,{S,S,S,S,N},F, A|M, NULL, 0, "listnode","Create list node" },
 	{ AdminCreateObject,  {S,N},   T, A|M, NULL, 0, "object",  "Create object by class name and parms" },
 	{ AdminCreateResource,{R,N},   F, A|M, NULL, 0, "resource","Create resource string" },
+   { AdminCreateTable,   {I,N},   F, A|M, NULL, 0, "table", "Create table of a given size" },
 	{ AdminCreateTimer,   {I,S,I,N},F,A|M, NULL, 0, "timer","Create timer for obj id, message, milli" },
 	{ AdminCreateUser,    {I,N},   F, A|M, NULL, 0, "user",    "Create user object by account id" },
 	{ AdminAddUserToEachAccount, {N},   F, A|M, NULL, 0, "useroneachaccount", "Add one user object to each account" }
@@ -439,6 +448,7 @@ admin_table_type admin_delete_table[] =
 admin_table_type admin_send_table[] =
 {
 	{ AdminSendObject,    {I,S,N}, T, A|M, NULL, 0, "object", "Send object by ID a message" },
+	{ AdminSendList,      {I,S,N}, T, A|M, NULL, 0, "list", "Send a message to each object in a list" },
 	{ AdminSendInt,       {I,S,N}, T, A|M, NULL, 0, "integer", "Send integer a message" },
 	{ AdminSendUsers,     {R,N},   F, A|M, NULL, 0, "users",  "Send logged in people a system message" },
 	{ AdminSendClass,     {S,S,N}, T, A|M, NULL, 0, "class",  "Send all objects of class a message" },
@@ -668,7 +678,6 @@ void SendSessionAdminText(int session_id,const char *fmt,...)
 	
 	admin_session_id = session_id;
 	
-	TermConvertBuffer(s,sizeof(s)); /* makes \n's into CR/LF pairs for edit boxes */
 	SendAdminBuffer(s,strlen(s));
 	
 	admin_session_id = prev_admin_session_id;
@@ -990,7 +999,7 @@ void AdminHelp(int session_id,int len_command_table,admin_table_type command_tab
 	
 	for (i=0;i<len_command_table;i++)
 	{
-		aprintf("%-10s ",command_table[i].admin_cmd);
+		aprintf("%-12s ",command_table[i].admin_cmd);
 		
 		done_parm = False;
 		for (j=0;j<MAX_ADMIN_PARM;j++)
@@ -1381,8 +1390,7 @@ void AdminShowStatus(int session_id,admin_parm_type parms[],
 	aprintf("Used %i object nodes\n",GetObjectsUsed());
 	aprintf("Used %i string nodes\n",GetStringsUsed());
 	aprintf("Watching %i active timers\n",GetNumActiveTimers());
-	aprintf("Max number of messages in a class is %i\n", GetHighestMessageCount());
-	aprintf("Number of message hash collisions is %i\n", GetNumMessageHashCollisions());
+	aprintf("%i message hash table collisions\n", GetNumMessageHashCollisions());
 	
 	if (IsGameLocked())
 		aprintf("The game is LOCKED (%s)\n",GetGameLockedReason());
@@ -1494,8 +1502,42 @@ void AdminShowCalledClass(class_node *c)
    }
 }
 
+void AdminShowRoomTable(int session_id, admin_parm_type parms[],
+                        int num_blak_parm, parm_node blak_parm[])
+{
+   PrintRoomTable();
+}
+
+void AdminShowBlockers(int session_id,admin_parm_type parms[],
+                      int num_blak_parm,parm_node blak_parm[])
+{
+   room_node *room;
+   Blocker *b;
+   int row, col, finerow, finecol;
+
+   room = GetRoomDataByID((int)parms[0]);
+   if (!room)
+   {
+      aprintf("Invalid roomdata.\n");
+
+      return;
+   }
+
+   b = room->data.Blocker;
+   while (b)
+   {
+      row = ROOCOORDTOGRIDBIG(b->Position.Y);
+      finerow = ROOCOORDTOGRIDFINE(b->Position.Y);
+      col = ROOCOORDTOGRIDBIG(b->Position.X);
+      finecol = ROOCOORDTOGRIDFINE(b->Position.X);
+      aprintf("Obj ID %i at row %i, %i, col %i, %i\n",
+         b->ObjectID, row, finerow, col, finecol);
+      b = b->Next;
+   }
+}
+
 void AdminShowObjects(int session_id,admin_parm_type parms[],
-                      int num_blak_parm,parm_node blak_parm[])                      
+                      int num_blak_parm,parm_node blak_parm[])
 {
 	object_node *o;
 	class_node *c;
@@ -1595,7 +1637,7 @@ void AdminShowObject(int session_id,admin_parm_type parms[],
 }
 
 void AdminShowListNode(int session_id,admin_parm_type parms[],
-                       int num_blak_parm,parm_node blak_parm[])                       
+                       int num_blak_parm,parm_node blak_parm[])
 {
 	list_node *l;
 	
@@ -1617,53 +1659,65 @@ void AdminShowListNode(int session_id,admin_parm_type parms[],
 }
 
 void AdminShowList(int session_id,admin_parm_type parms[],
-                   int num_blak_parm,parm_node blak_parm[])                   
+                   int num_blak_parm,parm_node blak_parm[])
 {
-	int list_id;
-	list_id = (int)parms[0];
-	
-	aprintf(":<\n");
-	AdminShowListParen(session_id,list_id,True);
-	aprintf(":>\n");
+   int list_id;
+   list_id = (int)parms[0];
+
+   aprintf(":<\n");
+   AdminShowListParen(session_id, list_id);
+   aprintf(":>\n");
 }
 
-void AdminShowListParen(int session_id,int list_id,int new_start)
+void AdminShowListParen(int session_id,int list_id)
 {
-	list_node *l;
-	
-	l = GetListNodeByID(list_id);
-	if (l == NULL)
-	{
-		aprintf("Invalid list node id %i (or it has been deleted).\n",
-			list_id);
-		return;
-	}
-	
-	if (new_start)
-		aprintf(": [\n");
-	
-	if (l->first.v.tag == TAG_LIST)
-		AdminShowListParen(session_id,l->first.v.data,True);
-	else
-	{
-		//if (!new_start)
-		//aprintf(", ");
-		aprintf(": %s %s\n",GetTagName(l->first),
-			GetDataName(l->first));
-	}
-	
-	if (l->rest.v.tag == TAG_LIST)
-		AdminShowListParen(session_id,l->rest.v.data,False);
-	else
-		if (l->rest.v.tag != TAG_NIL)
-		{
-			aprintf(": .\n");
-			aprintf(": %s %s\n",GetTagName(l->rest),
-					  GetDataName(l->rest));
-		}
+   list_node *l;
+   int count = 0;
 
-	if (new_start)
-		aprintf(": ]\n");
+   l = GetListNodeByID(list_id);
+   if (!l)
+   {
+      aprintf("Invalid list node id %i (or it has been deleted).\n",
+         list_id);
+      return;
+   }
+
+   aprintf(": [\n");
+
+   if (l->first.v.tag == TAG_LIST)
+      AdminShowListParen(session_id, l->first.v.data);
+   else
+      aprintf(": %s %s\n",GetTagName(l->first), GetDataName(l->first));
+   ++count;
+
+   while (l && l->rest.v.tag != TAG_NIL)
+   {
+      ++count;
+      if (l->rest.v.tag != TAG_LIST)
+      {
+         aprintf(": .\n");
+         aprintf(": %s %s\n", GetTagName(l->rest),
+            GetDataName(l->rest));
+         aprintf(": ] length %i\n", count);
+         aprintf("Invalid list node!\n");
+
+         return;
+      }
+
+      l = GetListNodeByID(l->rest.v.data);
+      if (!l)
+      {
+         aprintf("Invalid list node id %i (or it has been deleted).\n",
+            list_id);
+         return;
+      }
+      if (l->first.v.tag == TAG_LIST)
+         AdminShowListParen(session_id, l->first.v.data);
+      else
+         aprintf(": %s %s\n", GetTagName(l->first), GetDataName(l->first));
+   }
+
+   aprintf(": ] length %i\n", count);
 }
 
 void AdminShowUsers(int session_id,admin_parm_type parms[],
@@ -1856,6 +1910,42 @@ void AdminShowOneAccount(account_node *a)
         buff, a->credits/100,a->credits%100,TimeStr(a->last_login_time));
 }
 
+void AdminShowSuspended(int session_id, admin_parm_type parms[],
+   int num_blak_parm, parm_node blak_parm[])
+{
+   AdminShowAccountHeader();
+   ForEachAccount(AdminShowOneAccountIfSuspended);
+}
+
+void AdminShowOneAccountIfSuspended(account_node *a)
+{
+   char ch = ' ';
+   static const char* types = " ADG"; // see enum ACCOUNT_* in account.h
+   char buff[9];
+
+   if (a->type >= 0 && a->type <= (int)strlen(types))
+      ch = types[a->type];
+
+   // Check the suspend time.  Only printing suspended accounts.
+   if (a->suspend_time <= GetTime())
+   {
+      return;
+   }
+
+   if (a->suspend_time > 0)
+   {
+      // Print suspended time left in hours.
+      sprintf(buff, "%7.1fh", (a->suspend_time - GetTime()) / (60.0*60.0));
+   }
+   else
+   {
+      sprintf(buff, "");
+   }
+
+   aprintf("%4i%c %-24s%8s %4i.%02i %-30s\n", a->account_id, ch, a->name,
+      buff, a->credits / 100, a->credits % 100, TimeStr(a->last_login_time));
+}
+
 void AdminShowResource(int session_id,admin_parm_type parms[],
                        int num_blak_parm,parm_node blak_parm[])
 {
@@ -2001,7 +2091,7 @@ void AdminShowOneConfigNode(config_node *c,const char *config_name,const char *d
 }
 
 void AdminShowString(int session_id,admin_parm_type parms[],
-                     int num_blak_parm,parm_node blak_parm[])                     
+                     int num_blak_parm,parm_node blak_parm[])
 {
 	string_node *snod;
 	
@@ -2029,7 +2119,7 @@ void AdminShowString(int session_id,admin_parm_type parms[],
 }
 
 void AdminShowSysTimers(int session_id,admin_parm_type parms[],
-                        int num_blak_parm,parm_node blak_parm[])                        
+                        int num_blak_parm,parm_node blak_parm[])
 {
 	aprintf("%s %-18s %-15s %-15s %-22s\n","#","System Timer type","Period","On the",
 		"Next time");
@@ -2135,6 +2225,7 @@ void AdminShowCalls(int session_id,admin_parm_type parms[],
 		case FREEROOM : strcpy(c_name, "FreeRoom"); break;
 		case ROOMDATA : strcpy(c_name, "RoomData"); break;
 		case CANMOVEINROOMBSP: strcpy(c_name, "CanMoveInRoomBSP"); break;
+		case LINEOFSIGHTVIEW: strcpy(c_name, "LineOfSightView"); break;
 		case LINEOFSIGHTBSP: strcpy(c_name, "LineOfSightBSP"); break;
 		case GETLOCATIONINFOBSP: strcpy(c_name, "GetLocationInfoBSP"); break;
 		case GETRANDOMPOINTBSP: strcpy(c_name, "GetRandomPointBSP"); break;
@@ -2367,7 +2458,7 @@ void AdminShowInstances(int session_id,admin_parm_type parms[],
 }
 
 void AdminShowMatches(int session_id,admin_parm_type parms[],
-                      int num_blak_parm,parm_node blak_parm[])                      
+                      int num_blak_parm,parm_node blak_parm[])
 {
 	int i, m;
 	class_node *c;
@@ -2385,7 +2476,12 @@ void AdminShowMatches(int session_id,admin_parm_type parms[],
 	extern int num_objects;
 	enum { none=0,isequal=1,isgreater=2,isless=4,sametag=8,difftag=16 };
 	int matchtype;
-	
+
+	// For returning a list of objects
+	int list_id = INVALID_ID;
+	val_type first_val, rest_val;
+	rest_val.int_val = NIL;
+
 	class_str = (char *)parms[0];
 	property_str = (char *)parms[1];
 	relation_str = (char *)parms[2];
@@ -2459,8 +2555,18 @@ void AdminShowMatches(int session_id,admin_parm_type parms[],
 	aprintf(":< matching instances of CLASS %s (%i) %s %s %s %s\n",
 		c->class_name,c->class_id, property_str, relation_str,
 		GetTagName(match), GetDataName(match));
-	
-	m = 0;
+
+	// Limit size of the return list.
+	int max_list_size = ConfigInt(BLAKOD_MATCHES_LIST_MAX);
+
+	// Store everything in a buffer, flush to aprintf every 9000 chars.
+	// Necessary because this command can potentially list 100000s of objects.
+	char admin_buf[BUFFER_SIZE];
+	char *buf_ptr = admin_buf;
+	int len_admin_buf = 0, num_chars = 0;
+
+	m = 0; // Number of objects returned.
+	double startTime = GetMicroCountDouble();
 	for (i = 0; i < num_objects; i++)
 	{
 		class_node* wc = GetClassByID(objects[i].class_id);
@@ -2507,9 +2613,25 @@ void AdminShowMatches(int session_id,admin_parm_type parms[],
 				if ((thismatch &  (sametag|difftag)) == (matchtype &  (sametag|difftag)) &&
 					(thismatch & ~(sametag|difftag)) &  (matchtype & ~(sametag|difftag)))
 				{
-					aprintf(": OBJECT %i CLASS %s (%i) %s = %s %s\n",
-						i, thisc->class_name, thisc->class_id, property_str,
-						GetTagName(thisv), GetDataName(thisv));
+					if (m < max_list_size)
+					{
+						first_val.v.tag = TAG_OBJECT;
+						first_val.v.data = i;
+						list_id = Cons(first_val, rest_val);
+						rest_val.v.tag = TAG_LIST;
+						rest_val.v.data = list_id;
+					}
+					num_chars = sprintf(buf_ptr, ": OBJECT %i CLASS %s (%i) %s = %s %s\n",
+										i, thisc->class_name, thisc->class_id, property_str,
+										GetTagName(thisv), GetDataName(thisv));
+					len_admin_buf += num_chars;
+					buf_ptr += num_chars;
+					if (len_admin_buf > BUFFER_SIZE * 0.9)
+					{
+						buf_ptr -= len_admin_buf;
+						aprintf(buf_ptr);
+						len_admin_buf = 0;
+					}
 					m++;
 				}
 				
@@ -2518,8 +2640,16 @@ void AdminShowMatches(int session_id,admin_parm_type parms[],
 			wc = wc->super_ptr;
 		}
 	}
+	if (len_admin_buf)
+	{
+		buf_ptr -= len_admin_buf;
+		aprintf(buf_ptr);
+	}
 	aprintf(": %i total\n", m);
+	if (m)
+		aprintf(": Objects list: LIST %i\n",list_id);
 	aprintf(":>\n");
+	aprintf("Time to run: %.3f microseconds\n", GetMicroCountDouble() - startTime);
 }
 
 void AdminShowPackages(int session_id,admin_parm_type parms[],
@@ -3881,13 +4011,28 @@ void AdminCreateListNode(int session_id,admin_parm_type parms[],
 	list_id = Cons(first_val,rest_val);
 	aprintf("Created list node %i.\n",list_id);
 	aprintf(":<\n");
-	AdminShowListParen(session_id,list_id,True);
+	AdminShowListParen(session_id, list_id);
 	aprintf(":>\n");
 	
 }
 
+void AdminCreateTable(int session_id, admin_parm_type parms[],
+                      int num_blak_parm, parm_node blak_parm[])
+{
+   int table_id, table_size;
+   table_node *t;
+
+   table_size = (int)parms[0];
+   table_id = CreateTable(table_size);
+   t = GetTableByID(table_id);
+   if (!t)
+      aprintf("Couldn't create table %i with size %i!.\n", table_id, table_size);
+   else
+      aprintf("Created table %i, expected size %i, actual size %i.\n", table_id, table_size, t->size);
+}
+
 void AdminCreateTimer(int session_id,admin_parm_type parms[],
-                      int num_blak_parm,parm_node blak_parm[])                      
+                      int num_blak_parm,parm_node blak_parm[])
 {
 	int message_id,timer_id;
 	
@@ -4040,6 +4185,53 @@ void AdminSendInt(int session_id,admin_parm_type parms[],
    }
 }
 
+void AdminSendList(int session_id, admin_parm_type parms[],
+                  int num_blak_parm, parm_node blak_parm[])
+{
+   int list_id, message_id;
+   const char *message_name;
+   list_node *l;
+
+   list_id = (int)parms[0];
+   l = GetListNodeByID(list_id);
+   if (!l)
+   {
+      aprintf("AdminSendList couldn't find list_id %i", list_id);
+      return;
+   }
+
+   message_name = (char *)parms[1];
+   message_id = GetIDByName(message_name);
+   if (message_id == INVALID_ID)
+   {
+      aprintf("Cannot find message '%s'.\n", message_name);
+      return;
+   }
+
+   DoneLoadAccounts();
+
+   // Time this.
+   double startTime = GetMicroCountDouble();
+
+   if (l->first.v.tag == TAG_OBJECT)
+      SendTopLevelBlakodMessage(l->first.v.data, message_id, num_blak_parm, blak_parm);
+
+   while (l && l->rest.v.tag != TAG_NIL)
+   {
+      l = GetListNodeByID(l->rest.v.data);
+      if (!l)
+      {
+         aprintf("AdminSendList couldn't find list_id %i", list_id);
+         return;
+      }
+      if (l->first.v.tag == TAG_OBJECT)
+         SendTopLevelBlakodMessage(l->first.v.data, message_id, num_blak_parm, blak_parm);
+   }
+
+   aprintf("AdminSendList completed in %.3f microseconds.\n",
+      GetMicroCountDouble() - startTime);
+}
+
 void AdminSendObject(int session_id,admin_parm_type parms[],
                      int num_blak_parm,parm_node blak_parm[])
 {
@@ -4085,26 +4277,14 @@ void AdminSendObject(int session_id,admin_parm_type parms[],
 	if (data)
 		message_name = data;
 	
-   // Time the message if running on Windows.
-#ifdef BLAK_PLATFORM_WINDOWS
-   LARGE_INTEGER startTime, endTime, frequency;
-   double freq;
-   QueryPerformanceFrequency(&frequency);
-   freq = frequency.QuadPart / 1000000.0;
-   QueryPerformanceCounter(&startTime);
-#endif
+   // Time the message.
+   double startTime = GetMicroCountDouble();
 
    // Send the message and handle any posted messages spawned, also.
    blak_val.int_val = SendTopLevelBlakodMessage(object_id, message_id, num_blak_parm, blak_parm);
 
-#ifdef BLAK_PLATFORM_WINDOWS
-   QueryPerformanceCounter(&endTime);
-   if (freq > 0.0)
-   {
-      aprintf("Message %s completed in %.3f microseconds.\n", message_name,
-         ((double)(endTime.QuadPart - startTime.QuadPart) / freq));
-   }
-#endif
+   aprintf("Message %s completed in %.3f microseconds.\n", message_name,
+      GetMicroCountDouble() - startTime);
 
 	/* Note that o may be invalid from here if we needed to resize our object array
     * mid-message.  Messages that could create a ton of objects could do that, such

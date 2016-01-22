@@ -5,6 +5,6 @@
 !include $(TOPDIR)\common.mak
 
 DEPEND = ..\armor.bof
-BOFS = chain.bof plate.bof leather.bof scale.bof robe.bof neruarmr.bof
+BOFS = chain.bof plate.bof leather.bof scale.bof robebase.bof neruarmr.bof
 
 !include $(KODDIR)\kod.mak

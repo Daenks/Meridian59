@@ -242,6 +242,12 @@ messages:
          plEvilTwins = $;
       }
 
+      % If this Battler has an Evil Twin, delete it too.
+      if poEvilTwin <> $
+      {
+         Send(poEvilTwin,@Delete);
+      }
+
       % If this Battler has Apparitions attacking it, delete them.
       if plApparitionList <> $
       {
@@ -1670,7 +1676,8 @@ messages:
       return FALSE;
    }
 
-   RemoveEvilTwin()
+   ClearEvilTwin()
+   "Clears the poEvilTwin property, called when ET is deleted."
    {
       if poEvilTwin <> $
       {
@@ -1684,12 +1691,7 @@ messages:
 
    HasEvilTwin()
    {
-      if poEvilTwin <> $
-      {
-         return TRUE;
-      }
-
-      return FALSE;
+      return poEvilTwin <> $;
    }
 
    EvilTwinsCreated(what=$)
@@ -1857,6 +1859,11 @@ messages:
       }
 
       return;
+   }
+   
+   IsDrainImmune()
+   {
+      return FALSE;
    }
 
 end
