@@ -1111,7 +1111,7 @@ messages:
             }
          }
       }
-
+      Send(who,@EnterCombat);
       return TRUE;
    }
 

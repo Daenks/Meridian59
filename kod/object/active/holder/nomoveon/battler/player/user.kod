@@ -63,6 +63,9 @@ constants:
    % Speedhack/cheating detection:
    % What's the maximum number of times we should log a violation?
    MAX_LOGGED_THRESHOLD = 50
+   
+   %Seconds to count someone in-combat after combat actions have ceased
+   COMBAT_TIMER_LENGTH = 15
 
 resources:
 
@@ -461,6 +464,9 @@ resources:
    "The time in Meridian is %i:00.  It is the %q day of the year %i."
 
    user_tell_wav = imp.wav
+   
+   user_entered_combat = "You have begun combat."
+   user_exit_combat = "You have left combat."
 
 classvars:
 
@@ -526,6 +532,9 @@ properties:
 
    % keep track of how much this player triggers flood protection
    piFloodCount = 0
+   
+   % Reset by attacking or being attacked, when timer goes off, combat is ended.
+   ptInCombat = $
 
 messages:
 
@@ -6148,9 +6157,36 @@ messages:
          % Use the "weapon" (spell) as the stroke object.
          stroke_obj = use_weapon;
       }
-
+      
+      Send(self,@CombatStarted);
+      
       return Send(self,@TryAttack,#what=what,#use_weapon=use_weapon,
                   #stroke_obj=stroke_obj);
+   }
+   
+   CombatStarted()
+   {
+      if (ptInCombat <> $)
+      {
+         ptInCombat = CreateTimer(self,@CombatEnded,COMBAT_TIMER_LENGTH);
+      }
+      else 
+      {
+         DeleteTimer(ptInCombat);
+         ptInCombat = CreateTimer(self,@CombatEnded,COMBAT_TIMER_LENGTH);
+         Send(self,@MessageSendUser,#message_rsc=user_entered_combat);
+      }
+   }
+   
+   InCombat()
+   {
+      return (if ptInCombat <> $);
+   }
+   
+   CombatEnded(timer = $)
+   {
+      DeleteTimer(timer);
+      Send(self,@MessageSendUser,#message_rsc=user_exit_combat);
    }
 
    UserCast(oSpell=$,lTargets=$)
